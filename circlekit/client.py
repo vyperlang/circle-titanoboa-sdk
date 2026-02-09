@@ -490,12 +490,16 @@ class GatewayClient:
                 data = response.json()
                 
                 # Gateway API returns {token: "USDC", balances: [{domain, depositor, balance}]}
+                # Balance is returned as a string like "1.500000" (6 decimal places)
                 balances_list = data.get("balances", [])
                 
                 # Sum up all balances across domains
+                # Convert from decimal string to raw integer (6 decimals)
                 total = 0
                 for bal in balances_list:
-                    total += int(bal.get("balance", 0))
+                    balance_str = bal.get("balance", "0")
+                    # Parse as float and convert to raw (6 decimals)
+                    total += int(float(balance_str) * 1_000_000)
                 
                 # Available is typically the same as total unless funds are locked
                 available = total
@@ -542,7 +546,8 @@ class GatewayClient:
             # Use httpx to make RPC call directly
             rpc_url = self._rpc_url or self._config.rpc_url
             
-            # Encode balanceOf call
+            # All chains use ERC-20 compatible USDC now
+            # Arc has a sentinel contract at 0x3600... that wraps native USDC as ERC-20
             # balanceOf(address) selector = 0x70a08231
             address_padded = address[2:].lower().zfill(64)
             call_data = f"0x70a08231{address_padded}"
