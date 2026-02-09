@@ -1,10 +1,12 @@
-# circlekit-py
+# circle-titanoboa-sdk
 
 Python SDK for Circle's x402 Protocol and Gateway API. Uses **titanoboa** for all on-chain interactions (no web3.py).
 
+> Built for the [Vyper](https://github.com/vyperlang/vyper) ecosystem. Port of Circle's TypeScript SDK (`@circlefin/x402-batching`).
+
 ## What It Does
 
-**circlekit-py** enables gasless micropayments for Python applications:
+**circle-titanoboa-sdk** enables gasless micropayments for Python applications:
 
 1. **Buyers** can pay for API access without gas fees (signatures only)
 2. **Sellers** can monetize APIs with simple decorators
@@ -46,6 +48,41 @@ pip install -e ".[flask]"
 # With all dependencies
 pip install -e ".[all]"
 ```
+
+## Getting Testnet USDC
+
+Before using the SDK, you need testnet USDC on Arc Testnet (or another supported chain).
+
+### Option 1: Public Faucet (Recommended)
+
+No login required. Works with any wallet address.
+
+1. Go to **[faucet.circle.com](https://faucet.circle.com)**
+2. Select **Arc Testnet**
+3. Paste your wallet address (`0x...`)
+4. Get **10 USDC** (once per 24 hours)
+
+### Option 2: Developer Console Faucet
+
+Requires Circle account. Gives more tokens and native gas.
+
+1. Go to **[console.circle.com/faucet](https://console.circle.com/faucet)**
+2. Log in with your Circle developer account
+3. Use your **Wallet ID** (for Circle Programmable Wallets) or fund via API
+4. Get **20 USDC** + native tokens (10 requests per 24 hours)
+
+### Option 3: API Faucet
+
+Fund wallets programmatically:
+
+```bash
+curl -X POST https://api.circle.com/v1/faucet/drips \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"address": "0xYourAddress", "blockchain": "ARC-TESTNET", "usdc": true}'
+```
+
+> **Note:** On Arc Testnet, USDC is the native gas token—you only need USDC!
 
 ## Quick Start
 
@@ -141,7 +178,7 @@ typed_data_sig = manager.sign_typed_data(wallet.wallet_id, {
 
 ## Using with Vyper Contracts
 
-circlekit-py uses titanoboa internally, which means you can combine x402 payments with Vyper contract interactions seamlessly.
+circle-titanoboa-sdk uses titanoboa internally, which means you can combine x402 payments with Vyper contract interactions seamlessly.
 
 ### Demo 1: Paid Contract Query
 
