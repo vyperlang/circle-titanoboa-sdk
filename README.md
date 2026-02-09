@@ -53,23 +53,32 @@ pip install -e ".[all]"
 
 Before using the SDK, you need testnet USDC on Arc Testnet (or another supported chain).
 
-### For External Wallets (MetaMask, etc.)
+### Which Faucet Should I Use?
 
-Use the **Public Faucet** - works with any wallet **address** (`0x...`):
+| Wallet Type | Faucet | What You Get |
+|------------|--------|--------------|
+| **External wallet** (MetaMask, private key) | [Public Faucet](https://faucet.circle.com) | 20 USDC every 2 hours |
+| **Circle Programmable Wallet** | [Developer Console Faucet](https://console.circle.com/faucet) | 20 USDC + native tokens |
+
+### Public Faucet (Any Wallet)
+
+Use for wallets you control directly (MetaMask, private key, hardware wallet):
 
 1. Go to **[faucet.circle.com](https://faucet.circle.com)**
 2. Select **Arc Testnet**
-3. Paste your wallet address
-4. Get **10 USDC** (once per 24 hours, no login required)
+3. Paste your wallet **address** (`0x...`)
+4. Get **20 USDC** (every 2 hours per address per network)
 
-### For Circle Programmable Wallets
+No login required. Works with any wallet address.
 
-Use the **Developer Console Faucet** - requires **Wallet ID** (not address):
+### Developer Console Faucet (Circle Wallets)
+
+Use for Circle Programmable Wallets. Also provides native tokens for gas:
 
 1. Go to **[console.circle.com/faucet](https://console.circle.com/faucet)**
 2. Log in with your Circle developer account
-3. Enter your **Wallet ID** (found in Console under Dev Controlled → Wallets)
-4. Get **20 USDC** + native tokens (10 requests per 24 hours)
+3. Enter your **Wallet ID** (not the address - find it in Console under Dev Controlled > Wallets)
+4. Get **20 USDC** + native tokens (10 requests per 24 hours per account)
 
 ### API Faucet (Programmatic)
 
@@ -79,10 +88,10 @@ Fund Circle Programmable Wallets via API:
 curl -X POST https://api.circle.com/v1/faucet/drips \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"address": "0xYourAddress", "blockchain": "ARC-TESTNET", "usdc": true}'
+  -d '{"address": "0xYourAddress", "blockchain": "ARC-TESTNET", "usdc": true, "native": true}'
 ```
 
-> **Note:** On Arc Testnet, USDC is the native gas token—you only need USDC!
+> **Note:** On Arc Testnet, USDC is the native gas token. You only need USDC for both payments and gas.
 
 ## Quick Start
 
@@ -133,15 +142,39 @@ if __name__ == "__main__":
 
 ### Agent Wallets (Circle Programmable Wallets)
 
-Create agent wallets without managing raw private keys - Circle handles key security:
+Create agent wallets without managing raw private keys - Circle handles key security.
+
+#### Setup: Get Your API Key and Entity Secret
+
+Before using Programmable Wallets, you need credentials from Circle:
+
+1. **Get your API Key:**
+   - Go to [console.circle.com](https://console.circle.com)
+   - Navigate to **API Keys** in the sidebar
+   - Create a new API key or use an existing one
+   - Copy the key (starts with `TEST_API_KEY:` for testnet)
+
+2. **Generate your Entity Secret:**
+   - Go to [console.circle.com/wallets/dev/configurator/entity-secret](https://console.circle.com/wallets/dev/configurator/entity-secret)
+   - Click **Generate Entity Secret**
+   - **Important:** Save this secret securely. It cannot be retrieved later.
+   - Register the corresponding Entity Public Key with Circle
+
+3. **Set environment variables:**
+   ```bash
+   export CIRCLE_API_KEY="TEST_API_KEY:xxx..."
+   export CIRCLE_ENTITY_SECRET="your-entity-secret"
+   ```
+
+#### Usage
 
 ```python
 from circlekit import AgentWalletManager
 
 # Initialize with Circle API credentials
 manager = AgentWalletManager(
-    api_key="your-api-key",        # From https://console.circle.com
-    entity_secret="your-secret"     # Generated in Circle dashboard
+    api_key="your-api-key",        # Or os.environ["CIRCLE_API_KEY"]
+    entity_secret="your-secret"     # Or os.environ["CIRCLE_ENTITY_SECRET"]
 )
 
 # Create a wallet for an agent
@@ -168,11 +201,18 @@ typed_data_sig = manager.sign_typed_data(wallet.wallet_id, {
 })
 ```
 
-**Why use Programmable Wallets?**
-- No private key management - Circle handles security
+**When to use Programmable Wallets vs Private Keys:**
+
+| Approach | Use When |
+|----------|----------|
+| **Private Key** (`GatewayClient`) | Quick testing, personal use, existing wallets |
+| **Programmable Wallet** (`AgentWalletManager`) | Production agents, no key management, enterprise security |
+
+**Programmable Wallet benefits:**
+- No private key management (Circle handles security)
 - Perfect for AI agents that need persistent identities
-- Integrates with the rest of circlekit-py
-- Supports multiple blockchains
+- Fund wallets via [Developer Console Faucet](https://console.circle.com/faucet) (get native tokens + USDC)
+- Supports multiple blockchains with the same API
 
 ---
 
