@@ -226,12 +226,14 @@ class AgentWalletManager:
             )
         )
         
-        wallet_set_data = response.data.wallet_set
+        wallet_set_wrapper = response.data.wallet_set
+        # SDK uses a wrapper class with actual_instance containing the real data
+        wallet_set_data = wallet_set_wrapper.actual_instance if hasattr(wallet_set_wrapper, 'actual_instance') else wallet_set_wrapper
         
         return WalletSet(
             wallet_set_id=wallet_set_data.id,
-            name=wallet_set_data.name if hasattr(wallet_set_data, 'name') else name,
-            custody_type=wallet_set_data.custody_type if hasattr(wallet_set_data, 'custody_type') else None,
+            name=getattr(wallet_set_data, 'name', name),
+            custody_type=getattr(wallet_set_data, 'custody_type', None),
         )
     
     def list_wallet_sets(self) -> List[WalletSet]:
@@ -382,8 +384,8 @@ class AgentWalletManager:
             SignatureResult with hex signature
         """
         response = self._signing_api.sign_message(
-            id=wallet_id,
             sign_message_request=SignMessageRequest(
+                walletId=wallet_id,
                 message=message,
                 entitySecretCiphertext=self._entity_secret_ciphertext,
             )
@@ -427,10 +429,13 @@ class AgentWalletManager:
             }
             result = manager.sign_typed_data(wallet_id, typed_data)
         """
+        import json
+        
+        # Circle SDK expects the typed data as a JSON string in the 'data' field
         response = self._signing_api.sign_typed_data(
-            id=wallet_id,
             sign_typed_data_request=SignTypedDataRequest(
-                typedData=typed_data,
+                walletId=wallet_id,
+                data=json.dumps(typed_data),
                 entitySecretCiphertext=self._entity_secret_ciphertext,
             )
         )
