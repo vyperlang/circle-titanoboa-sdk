@@ -1,0 +1,82 @@
+[project]
+name = "circlekit"
+version = "0.1.0"
+description = "Python SDK for Circle's x402 Batching, Gateway, and Wallet APIs - using titanoboa for on-chain interactions"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [
+    { name = "circlekit contributors" }
+]
+keywords = ["circle", "usdc", "x402", "gateway", "payments", "micropayments", "titanoboa", "vyper", "arc"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Office/Business :: Financial",
+]
+
+dependencies = [
+    "titanoboa>=0.2.0",
+    "eth-account>=0.11.0",
+    "httpx>=0.27.0",
+]
+
+[project.optional-dependencies]
+flask = [
+    "flask>=3.0.0",
+]
+fastapi = [
+    "fastapi>=0.109.0",
+    "uvicorn>=0.27.0",
+]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "black>=24.0.0",
+    "isort>=5.13.0",
+    "mypy>=1.8.0",
+]
+all = [
+    "flask>=3.0.0",
+    "fastapi>=0.109.0",
+    "uvicorn>=0.27.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/example/circlekit-py"
+Documentation = "https://github.com/example/circlekit-py#readme"
+Repository = "https://github.com/example/circlekit-py"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["circlekit"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+asyncio_mode = "auto"
+
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311", "py312"]
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
