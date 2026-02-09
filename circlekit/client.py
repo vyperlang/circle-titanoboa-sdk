@@ -37,6 +37,11 @@ from circlekit.boa_utils import (
     get_account_from_private_key,
     format_usdc,
     parse_usdc,
+    execute_approve,
+    execute_deposit,
+    check_allowance,
+    get_usdc_balance,
+    get_gateway_balance,
 )
 from circlekit.x402 import (
     parse_402_response,
@@ -181,6 +186,11 @@ class GatewayClient:
         This is a one-time setup step. Once you have a Gateway balance,
         you can make gasless payments.
         
+        Steps:
+        1. Check current allowance
+        2. If insufficient, approve Gateway to spend USDC
+        3. Call Gateway.deposit(amount)
+        
         Args:
             amount: Amount to deposit in decimal (e.g., '10.5')
             approve_amount: Amount to approve (defaults to amount)
@@ -189,22 +199,56 @@ class GatewayClient:
             DepositResult with transaction hashes
             
         Note:
-            This requires gas on the source chain.
+            This requires gas on the source chain. On Arc Testnet,
+            gas is paid in USDC.
         """
+        import asyncio
+        
         amount_raw = parse_usdc(amount)
         approve_raw = parse_usdc(approve_amount) if approve_amount else amount_raw
         
-        # For now, we'll use the Gateway API for deposits
-        # In a full implementation, we'd use boa to interact with contracts directly
+        approval_tx_hash: Optional[str] = None
         
-        # TODO: Implement actual on-chain deposit using titanoboa
-        # 1. Approve USDC transfer to Gateway contract
-        # 2. Call Gateway.deposit(amount)
+        # Run blocking boa operations in thread pool to not block async
+        loop = asyncio.get_event_loop()
         
-        # Placeholder - actual implementation needs on-chain transactions
-        raise NotImplementedError(
-            "Direct deposit not yet implemented. "
-            "Use the Gateway API or TypeScript SDK for deposits."
+        # Step 1: Check current allowance
+        current_allowance = await loop.run_in_executor(
+            None,
+            check_allowance,
+            self._chain,
+            self._address,
+            self._config.gateway_address,
+            self._rpc_url,
+        )
+        
+        # Step 2: Approve if needed
+        if current_allowance < amount_raw:
+            approval_tx_hash = await loop.run_in_executor(
+                None,
+                execute_approve,
+                self._chain,
+                self._private_key,
+                self._config.gateway_address,
+                approve_raw,
+                self._rpc_url,
+            )
+        
+        # Step 3: Execute deposit
+        deposit_tx_hash = await loop.run_in_executor(
+            None,
+            execute_deposit,
+            self._chain,
+            self._private_key,
+            amount_raw,
+            self._rpc_url,
+        )
+        
+        return DepositResult(
+            approval_tx_hash=approval_tx_hash,
+            deposit_tx_hash=deposit_tx_hash,
+            amount=amount_raw,
+            formatted_amount=format_usdc(amount_raw),
         )
     
     async def pay(
@@ -309,18 +353,108 @@ class GatewayClient:
         """
         Withdraw USDC from Gateway to wallet.
         
+        This uses Circle Gateway's instant withdrawal API, which allows
+        cross-chain withdrawals without waiting for finality.
+        
         Args:
-            amount: Amount to withdraw in decimal
-            chain: Destination chain (default: same chain)
+            amount: Amount to withdraw in decimal (e.g., '5.0')
+            chain: Destination chain (default: same chain as client)
             recipient: Recipient address (default: your address)
             
         Returns:
             WithdrawResult with transaction info
+            
+        Note:
+            Cross-chain withdrawals mint USDC on the destination chain.
+            The recipient needs gas on that chain to receive the tokens.
         """
-        # TODO: Implement via Gateway API
-        raise NotImplementedError(
-            "Withdraw not yet implemented. "
-            "Use the Gateway API or TypeScript SDK for withdrawals."
+        amount_raw = parse_usdc(amount)
+        dest_chain = chain or self._chain
+        dest_recipient = recipient or self._address
+        
+        # Get destination chain config
+        dest_config = get_chain_config(dest_chain)
+        
+        # Create withdrawal request via Gateway API
+        # The API requires a signed message authorizing the withdrawal
+        import time
+        import base64
+        import json as json_module
+        
+        # Build withdrawal request
+        withdrawal_request = {
+            "amount": str(amount_raw),
+            "sourceChain": f"eip155:{self._config.chain_id}",
+            "destinationChain": f"eip155:{dest_config.chain_id}",
+            "recipient": dest_recipient,
+            "sender": self._address,
+        }
+        
+        # Sign the withdrawal request using EIP-712
+        from circlekit.boa_utils import sign_typed_data
+        
+        domain = {
+            "name": "CircleGateway",
+            "version": "1",
+            "chainId": self._config.chain_id,
+            "verifyingContract": self._config.gateway_address,
+        }
+        
+        types = {
+            "Withdraw": [
+                {"name": "amount", "type": "uint256"},
+                {"name": "recipient", "type": "address"},
+                {"name": "destinationDomain", "type": "uint32"},
+                {"name": "nonce", "type": "uint256"},
+            ]
+        }
+        
+        nonce = int(time.time() * 1000)  # Use timestamp as nonce
+        
+        message = {
+            "amount": amount_raw,
+            "recipient": dest_recipient,
+            "destinationDomain": dest_config.gateway_domain,
+            "nonce": nonce,
+        }
+        
+        signature = sign_typed_data(
+            private_key=self._private_key,
+            domain_data=domain,
+            message_types=types,
+            message_data=message,
+            primary_type="Withdraw",
+        )
+        
+        # Submit to Gateway API
+        api_url = f"{self._gateway_api}/v1/withdraw"
+        
+        payload = {
+            **withdrawal_request,
+            "nonce": nonce,
+            "signature": signature,
+        }
+        
+        response = await self._http.post(api_url, json=payload)
+        
+        if response.status_code != 200:
+            error_msg = response.text
+            try:
+                error_data = response.json()
+                error_msg = error_data.get("error", error_msg)
+            except Exception:
+                pass
+            raise ValueError(f"Withdrawal failed: {error_msg}")
+        
+        result = response.json()
+        
+        return WithdrawResult(
+            mint_tx_hash=result.get("transactionHash", ""),
+            amount=amount_raw,
+            formatted_amount=format_usdc(amount_raw),
+            source_chain=self._config.name,
+            destination_chain=dest_config.name,
+            recipient=dest_recipient,
         )
     
     async def get_balances(self, address: Optional[str] = None) -> Balances:
@@ -335,19 +469,36 @@ class GatewayClient:
         """
         address = address or self._address
         
-        # Query Gateway API for balances
+        # Query Gateway API for balances (POST endpoint with body)
         try:
-            api_url = f"{self._gateway_api}/v1/balances/{address}"
-            response = await self._http.get(api_url)
+            api_url = f"{self._gateway_api}/v1/balances"
+            # Gateway API requires POST with token and sources
+            request_body = {
+                "token": "USDC",
+                "sources": [
+                    {
+                        "depositor": address,
+                        # Omit domain to get balances from all domains
+                    }
+                ]
+            }
+            response = await self._http.post(api_url, json=request_body)
             
             if response.status_code == 200:
                 data = response.json()
-                gateway_balance = data.get("balance", {})
                 
-                total = int(gateway_balance.get("total", 0))
-                available = int(gateway_balance.get("available", 0))
-                withdrawing = int(gateway_balance.get("withdrawing", 0))
-                withdrawable = int(gateway_balance.get("withdrawable", 0))
+                # Gateway API returns {token: "USDC", balances: [{domain, depositor, balance}]}
+                balances_list = data.get("balances", [])
+                
+                # Sum up all balances across domains
+                total = 0
+                for bal in balances_list:
+                    total += int(bal.get("balance", 0))
+                
+                # Available is typically the same as total unless funds are locked
+                available = total
+                withdrawing = 0
+                withdrawable = 0
                 
                 gateway = GatewayBalance(
                     total=total,

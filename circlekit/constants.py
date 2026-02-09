@@ -41,14 +41,17 @@ class ChainConfig:
 # These are the networks supported by Circle Gateway
 CHAIN_CONFIGS: Dict[str, ChainConfig] = {
     # ============ TESTNETS ============
+    # NOTE: On Arc, USDC is the NATIVE gas token (like ETH on Ethereum).
+    # This means USDC balance queries use eth_getBalance, not ERC-20 balanceOf.
+    # The usdc_address field is kept for compatibility but may not have contract code.
     "arcTestnet": ChainConfig(
         chain_id=5042002,
         name="Arc Testnet",
-        rpc_url="https://rpc.testnet.arc.circle.com",
-        usdc_address="0x3600000000000000000000000000000000000000",
-        gateway_address="0x0077777d7eba4688bdef3e311b846f25870a19b9",
-        gateway_domain=5042002,  # Same as chain ID for testnets
-        explorer_url="https://explorer.testnet.arc.circle.com",
+        rpc_url="https://arc-testnet.drpc.org",  # Public RPC from dRPC
+        usdc_address="0x2D270e6886d130D724215A266106e6832161EAEd",  # USDC address from Circle docs
+        gateway_address="0x0077777d7eba4688bdef3e311b846f25870a19b9",  # Gateway Wallet (verified)
+        gateway_domain=26,  # Arc Testnet domain ID from Circle docs
+        explorer_url="https://testnet.arcscan.app",  # Real Arc explorer
         is_testnet=True,
     ),
     "baseSepolia": ChainConfig(
@@ -146,9 +149,9 @@ CHAIN_CONFIGS: Dict[str, ChainConfig] = {
 }
 
 
-# Gateway API endpoints
-GATEWAY_API_BASE_URL = "https://gateway.circle.com"
-GATEWAY_API_TESTNET_URL = "https://gateway-testnet.circle.com"
+# Gateway API endpoints (real Circle endpoints)
+GATEWAY_API_BASE_URL = "https://gateway-api.circle.com"
+GATEWAY_API_TESTNET_URL = "https://gateway-api-testnet.circle.com"
 
 
 def get_gateway_api_url(is_testnet: bool = True) -> str:

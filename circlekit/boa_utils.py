@@ -259,3 +259,208 @@ def get_block_timestamp(chain: str, rpc_url: Optional[str] = None) -> int:
     """
     setup_boa_env(chain, rpc_url)
     return boa.env.vm.state.timestamp
+
+
+# =============================================================================
+# Transaction Execution Helpers
+# =============================================================================
+
+def setup_boa_with_account(
+    chain: str,
+    private_key: str,
+    rpc_url: Optional[str] = None,
+) -> Tuple[str, Any]:
+    """
+    Set up titanoboa environment with a signing account.
+    
+    This configures boa to sign and broadcast transactions using the
+    provided private key.
+    
+    Args:
+        chain: Chain name (e.g., 'arcTestnet')
+        private_key: Hex-encoded private key
+        rpc_url: Optional custom RPC URL
+        
+    Returns:
+        Tuple of (address, boa environment)
+    """
+    config = get_chain_config(chain)
+    url = rpc_url or config.rpc_url
+    
+    # Ensure private key has 0x prefix
+    if not private_key.startswith("0x"):
+        private_key = "0x" + private_key
+    
+    # Get account
+    account = Account.from_key(private_key)
+    
+    # Set up network environment with the account
+    # titanoboa uses boa.env.add_account() for signing
+    boa.set_network_env(url)
+    boa.env.add_account(account)
+    
+    return account.address, boa.env
+
+
+def execute_approve(
+    chain: str,
+    private_key: str,
+    spender: str,
+    amount: int,
+    rpc_url: Optional[str] = None,
+) -> str:
+    """
+    Approve a spender to transfer USDC on behalf of the signer.
+    
+    Uses titanoboa's account system for signing real transactions.
+    
+    Args:
+        chain: Chain name
+        private_key: Hex-encoded private key
+        spender: Address to approve (e.g., Gateway contract)
+        amount: Amount to approve (raw, 6 decimals)
+        rpc_url: Optional custom RPC URL
+        
+    Returns:
+        Transaction hash
+        
+    Note:
+        Requires the account to have gas tokens for transaction fees.
+        On Arc Testnet, gas is paid in USDC.
+    """
+    config = get_chain_config(chain)
+    address, env = setup_boa_with_account(chain, private_key, rpc_url)
+    
+    # Load USDC contract with the signer's address set
+    usdc = boa.loads_abi(json.dumps(ERC20_ABI), config.usdc_address)
+    
+    # Execute approve transaction
+    # After add_account(), boa uses that account for signing transactions
+    # The account added in setup_boa_with_account is used automatically
+    tx = usdc.approve(spender, amount)
+    
+    # Return tx hash (boa returns the result, tx hash is in env)
+    # For network transactions, we need to get the tx hash differently
+    try:
+        # Try to get last tx hash from boa environment
+        if hasattr(boa.env, 'last_tx') and boa.env.last_tx:
+            return boa.env.last_tx.hex() if hasattr(boa.env.last_tx, 'hex') else str(boa.env.last_tx)
+        return str(tx) if tx else ""
+    except Exception:
+        return str(tx) if tx else ""
+
+
+def execute_deposit(
+    chain: str,
+    private_key: str,
+    amount: int,
+    rpc_url: Optional[str] = None,
+) -> str:
+    """
+    Deposit USDC into the Gateway contract.
+    
+    Uses titanoboa's account system for signing real transactions.
+    
+    Note: Requires prior approval of the Gateway contract to spend USDC.
+    
+    Args:
+        chain: Chain name
+        private_key: Hex-encoded private key
+        amount: Amount to deposit (raw, 6 decimals)
+        rpc_url: Optional custom RPC URL
+        
+    Returns:
+        Transaction hash
+        
+    Note:
+        Requires the account to have:
+        1. USDC approved for the Gateway contract
+        2. Gas tokens for transaction fees
+    """
+    config = get_chain_config(chain)
+    address, env = setup_boa_with_account(chain, private_key, rpc_url)
+    
+    # Load Gateway contract
+    gateway = boa.loads_abi(json.dumps(GATEWAY_WALLET_ABI), config.gateway_address)
+    
+    # Execute deposit transaction
+    # The account added in setup_boa_with_account is used for signing
+    tx = gateway.deposit(amount)
+    
+    try:
+        if hasattr(boa.env, 'last_tx') and boa.env.last_tx:
+            return boa.env.last_tx.hex() if hasattr(boa.env.last_tx, 'hex') else str(boa.env.last_tx)
+        return str(tx) if tx else ""
+    except Exception:
+        return str(tx) if tx else ""
+
+
+def check_allowance(
+    chain: str,
+    owner: str,
+    spender: str,
+    rpc_url: Optional[str] = None,
+) -> int:
+    """
+    Check USDC allowance for a spender.
+    
+    Args:
+        chain: Chain name
+        owner: Token owner address
+        spender: Spender address (e.g., Gateway)
+        rpc_url: Optional custom RPC URL
+        
+    Returns:
+        Current allowance (raw, 6 decimals)
+    """
+    config = get_chain_config(chain)
+    setup_boa_env(chain, rpc_url)
+    
+    usdc = boa.loads_abi(json.dumps(ERC20_ABI), config.usdc_address)
+    return usdc.allowance(owner, spender)
+
+
+def get_usdc_balance(
+    chain: str,
+    address: str,
+    rpc_url: Optional[str] = None,
+) -> int:
+    """
+    Get USDC balance for an address.
+    
+    Args:
+        chain: Chain name
+        address: Address to check
+        rpc_url: Optional custom RPC URL
+        
+    Returns:
+        Balance (raw, 6 decimals)
+    """
+    config = get_chain_config(chain)
+    setup_boa_env(chain, rpc_url)
+    
+    usdc = boa.loads_abi(json.dumps(ERC20_ABI), config.usdc_address)
+    return usdc.balanceOf(address)
+
+
+def get_gateway_balance(
+    chain: str,
+    address: str,
+    rpc_url: Optional[str] = None,
+) -> int:
+    """
+    Get Gateway balance for an address.
+    
+    Args:
+        chain: Chain name
+        address: Address to check
+        rpc_url: Optional custom RPC URL
+        
+    Returns:
+        Balance (raw, 6 decimals)
+    """
+    config = get_chain_config(chain)
+    setup_boa_env(chain, rpc_url)
+    
+    gateway = boa.loads_abi(json.dumps(GATEWAY_WALLET_ABI), config.gateway_address)
+    return gateway.balanceOf(address)

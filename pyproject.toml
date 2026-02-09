@@ -1,14 +1,14 @@
 [project]
-name = "circlekit"
+name = "circle-titanoboa-sdk"
 version = "0.1.0"
-description = "Python SDK for Circle's x402 Batching, Gateway, and Wallet APIs - using titanoboa for on-chain interactions"
+description = "Python SDK for Circle's x402 Protocol, Gateway, and Programmable Wallets - using titanoboa for Vyper contract interactions"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
 authors = [
-    { name = "circlekit contributors" }
+    { name = "Circle Hackathon Team" }
 ]
-keywords = ["circle", "usdc", "x402", "gateway", "payments", "micropayments", "titanoboa", "vyper", "arc"]
+keywords = ["circle", "usdc", "x402", "gateway", "payments", "micropayments", "titanoboa", "vyper", "arc", "programmable-wallets"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -25,6 +25,7 @@ dependencies = [
     "titanoboa>=0.2.0",
     "eth-account>=0.11.0",
     "httpx>=0.27.0",
+    "circle-developer-controlled-wallets>=9.2.0",  # Circle Programmable Wallets SDK
 ]
 
 [project.optional-dependencies]
@@ -49,9 +50,9 @@ all = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/example/circlekit-py"
-Documentation = "https://github.com/example/circlekit-py#readme"
-Repository = "https://github.com/example/circlekit-py"
+Homepage = "https://github.com/circle-hackathon/circle-titanoboa-sdk"
+Documentation = "https://github.com/circle-hackathon/circle-titanoboa-sdk#readme"
+Repository = "https://github.com/circle-hackathon/circle-titanoboa-sdk"
 
 [build-system]
 requires = ["hatchling"]

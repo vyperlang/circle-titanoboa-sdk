@@ -325,6 +325,25 @@ def is_batch_payment(requirements: Union[Dict, PaymentRequirements]) -> bool:
     return extra.get("name") == CIRCLE_BATCHING_NAME
 
 
+def get_verifying_contract(requirements: Union[Dict, PaymentRequirements]) -> Optional[str]:
+    """
+    Extract the GatewayWallet contract address from payment requirements.
+    
+    This is the contract that will execute the batched settlement.
+    
+    Args:
+        requirements: Payment requirements (dict or PaymentRequirements)
+        
+    Returns:
+        GatewayWallet contract address, or None if not a batch payment
+    """
+    if isinstance(requirements, PaymentRequirements):
+        return requirements.verifying_contract
+    
+    extra = requirements.get("extra", {})
+    return extra.get("verifyingContract")
+
+
 def build_402_response(
     seller_address: str,
     amount: str,

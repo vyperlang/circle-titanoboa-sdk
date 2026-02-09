@@ -57,3 +57,12 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Node.js (if accidentally created)
+node_modules/
+package.json
+package-lock.json
+
+# Circle recovery files (NEVER commit these!)
+recovery_file*.dat
+*.recovery
