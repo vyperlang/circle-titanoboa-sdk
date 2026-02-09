@@ -3,7 +3,6 @@ name = "circle-titanoboa-sdk"
 version = "0.1.0"
 description = "Python SDK for Circle's x402 Protocol, Gateway, and Programmable Wallets - using titanoboa for Vyper contract interactions"
 readme = "README.md"
-license = { text = "MIT" }
 requires-python = ">=3.10"
 authors = [
     { name = "Circle Hackathon Team" }
@@ -12,7 +11,6 @@ keywords = ["circle", "usdc", "x402", "gateway", "payments", "micropayments", "t
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
