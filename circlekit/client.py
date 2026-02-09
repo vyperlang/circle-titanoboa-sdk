@@ -100,6 +100,8 @@ class GatewayBalance:
     withdrawable: int
     formatted_total: str
     formatted_available: str
+    formatted_withdrawing: str
+    formatted_withdrawable: str
 
 
 @dataclass
@@ -507,6 +509,8 @@ class GatewayClient:
                     withdrawable=withdrawable,
                     formatted_total=format_usdc(total),
                     formatted_available=format_usdc(available),
+                    formatted_withdrawing=format_usdc(withdrawing),
+                    formatted_withdrawable=format_usdc(withdrawable),
                 )
             else:
                 # Fallback to zero balances
@@ -517,6 +521,8 @@ class GatewayClient:
                     withdrawable=0,
                     formatted_total="0.000000",
                     formatted_available="0.000000",
+                    formatted_withdrawing="0.000000",
+                    formatted_withdrawable="0.000000",
                 )
         except Exception:
             # On error, return zero gateway balance
@@ -527,6 +533,8 @@ class GatewayClient:
                 withdrawable=0,
                 formatted_total="0.000000",
                 formatted_available="0.000000",
+                formatted_withdrawing="0.000000",
+                formatted_withdrawable="0.000000",
             )
         
         # Query on-chain USDC balance using RPC
