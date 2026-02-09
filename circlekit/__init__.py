@@ -43,6 +43,7 @@ from circlekit.server import create_gateway_middleware
 from circlekit.x402 import (
     parse_402_response,
     create_payment_header,
+    decode_payment_header,
     is_batch_payment,
     get_verifying_contract,
     X402Response,
@@ -77,7 +78,8 @@ __all__ = [
     "create_agent_wallet_manager",
     # x402 protocol
     "parse_402_response",
-    "create_payment_header", 
+    "create_payment_header",
+    "decode_payment_header",
     "is_batch_payment",
     "get_verifying_contract",
     "X402Response",
