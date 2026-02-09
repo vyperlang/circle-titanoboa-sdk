@@ -63,7 +63,9 @@ packages = ["circlekit"]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
-addopts = "-v --tb=short"
+# Use --forked for test isolation (boa env pollution prevention)
+# Disable titanoboa pytest plugin - it tries to use evm_snapshot on real RPCs which fails.
+addopts = "-v --tb=short -p no:titanoboa --forked"
 asyncio_mode = "auto"
 
 [tool.black]
