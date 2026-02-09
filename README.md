@@ -53,27 +53,27 @@ pip install -e ".[all]"
 
 Before using the SDK, you need testnet USDC on Arc Testnet (or another supported chain).
 
-### Option 1: Public Faucet (Recommended)
+### For External Wallets (MetaMask, etc.)
 
-No login required. Works with any wallet address.
+Use the **Public Faucet** - works with any wallet **address** (`0x...`):
 
 1. Go to **[faucet.circle.com](https://faucet.circle.com)**
 2. Select **Arc Testnet**
-3. Paste your wallet address (`0x...`)
-4. Get **10 USDC** (once per 24 hours)
+3. Paste your wallet address
+4. Get **10 USDC** (once per 24 hours, no login required)
 
-### Option 2: Developer Console Faucet
+### For Circle Programmable Wallets
 
-Requires Circle account. Gives more tokens and native gas.
+Use the **Developer Console Faucet** - requires **Wallet ID** (not address):
 
 1. Go to **[console.circle.com/faucet](https://console.circle.com/faucet)**
 2. Log in with your Circle developer account
-3. Use your **Wallet ID** (for Circle Programmable Wallets) or fund via API
+3. Enter your **Wallet ID** (found in Console under Dev Controlled → Wallets)
 4. Get **20 USDC** + native tokens (10 requests per 24 hours)
 
-### Option 3: API Faucet
+### API Faucet (Programmatic)
 
-Fund wallets programmatically:
+Fund Circle Programmable Wallets via API:
 
 ```bash
 curl -X POST https://api.circle.com/v1/faucet/drips \
