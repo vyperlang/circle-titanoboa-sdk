@@ -42,13 +42,13 @@ class ChainConfig:
 CHAIN_CONFIGS: Dict[str, ChainConfig] = {
     # ============ TESTNETS ============
     # NOTE: On Arc, USDC is the NATIVE gas token (like ETH on Ethereum).
-    # This means USDC balance queries use eth_getBalance, not ERC-20 balanceOf.
-    # The usdc_address field is kept for compatibility but may not have contract code.
+    # However, there's a sentinel contract at 0x3600... that wraps native USDC
+    # as an ERC-20, so standard balanceOf/approve/transferFrom work normally.
     "arcTestnet": ChainConfig(
         chain_id=5042002,
         name="Arc Testnet",
-        rpc_url="https://arc-testnet.drpc.org",  # Public RPC from dRPC
-        usdc_address="0x2D270e6886d130D724215A266106e6832161EAEd",  # USDC address from Circle docs
+        rpc_url="https://arc-testnet.drpc.org",  # dRPC public endpoint (more reliable)
+        usdc_address="0x3600000000000000000000000000000000000000",  # Native USDC sentinel address
         gateway_address="0x0077777d7eba4688bdef3e311b846f25870a19b9",  # Gateway Wallet (verified)
         gateway_domain=26,  # Arc Testnet domain ID from Circle docs
         explorer_url="https://testnet.arcscan.app",  # Real Arc explorer
