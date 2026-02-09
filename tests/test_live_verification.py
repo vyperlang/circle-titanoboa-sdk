@@ -84,11 +84,10 @@ class TestLiveUSDCContract:
     @pytest.mark.asyncio
     async def test_arc_testnet_usdc_has_code(self):
         """
-        Arc Testnet USDC address should have contract code.
+        Arc Testnet USDC sentinel contract should have code.
         
-        NOTE: On Arc, USDC is the NATIVE gas token, similar to ETH on Ethereum.
-        This means it might not be an ERC-20 contract at a standard address.
-        The test checks for contract code, but may fail if USDC is native.
+        NOTE: On Arc, USDC is the native gas token, but there's a sentinel
+        contract at 0x3600... that wraps it as ERC-20 for compatibility.
         """
         from circlekit.constants import CHAIN_CONFIGS
         
@@ -108,15 +107,10 @@ class TestLiveUSDCContract:
         data = response.json()
         code = data.get("result", "0x")
         
-        # On Arc, USDC is native, so there might not be ERC-20 contract code
-        if len(code) <= 2:
-            # Try to check if this is because USDC is native
-            # Query eth_getBalance to see if the address concept works differently
-            print(f"NOTE: No ERC-20 code at {config.usdc_address}")
-            print("On Arc, USDC is the native gas token - may not be ERC-20")
-            pytest.skip("Arc uses native USDC, not ERC-20 contract")
+        # The sentinel contract should have code
+        assert len(code) > 2, f"No contract code at sentinel address {config.usdc_address}"
         
-        print(f"Arc Testnet USDC verified: {len(code)} bytes of code")
+        print(f"Arc Testnet USDC sentinel verified: {len(code)} bytes of code")
     
     @pytest.mark.asyncio
     async def test_arc_testnet_usdc_decimals(self):

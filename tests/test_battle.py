@@ -300,7 +300,7 @@ class TestSecurity:
         requirements = PaymentRequirements(
             scheme="exact",
             network="eip155:5042002",
-            asset="0x2D270e6886d130D724215A266106e6832161EAEd",
+            asset="0x3600000000000000000000000000000000000000",
             amount="10000",
             pay_to="0x1234567890123456789012345678901234567890",
         )
@@ -329,7 +329,7 @@ class TestSecurity:
         requirements = PaymentRequirements(
             scheme="exact",
             network="eip155:5042002",
-            asset="0x2D270e6886d130D724215A266106e6832161EAEd",
+            asset="0x3600000000000000000000000000000000000000",
             amount="10000",
             pay_to="0x1234567890123456789012345678901234567890",
         )
@@ -356,7 +356,7 @@ class TestSecurity:
         requirements = PaymentRequirements(
             scheme="exact",
             network="eip155:5042002",
-            asset="0x2D270e6886d130D724215A266106e6832161EAEd",
+            asset="0x3600000000000000000000000000000000000000",
             amount="10000",
             pay_to="0x1234567890123456789012345678901234567890",
         )
@@ -389,7 +389,7 @@ class TestPaymentAmounts:
         requirements = PaymentRequirements(
             scheme="exact",
             network="eip155:5042002",
-            asset="0x2D270e6886d130D724215A266106e6832161EAEd",
+            asset="0x3600000000000000000000000000000000000000",
             amount="1",  # 0.000001 USDC
             pay_to="0x1234567890123456789012345678901234567890",
         )
@@ -412,7 +412,7 @@ class TestPaymentAmounts:
         requirements = PaymentRequirements(
             scheme="exact",
             network="eip155:5042002",
-            asset="0x2D270e6886d130D724215A266106e6832161EAEd",
+            asset="0x3600000000000000000000000000000000000000",
             amount=large_amount,
             pay_to="0x1234567890123456789012345678901234567890",
         )
@@ -432,7 +432,7 @@ class TestPaymentAmounts:
         requirements = PaymentRequirements(
             scheme="exact",
             network="eip155:5042002",
-            asset="0x2D270e6886d130D724215A266106e6832161EAEd",
+            asset="0x3600000000000000000000000000000000000000",
             amount="0",
             pay_to="0x1234567890123456789012345678901234567890",
         )
@@ -518,7 +518,7 @@ class TestX402ResponseBuilding:
             seller_address="0x1234567890123456789012345678901234567890",
             amount="10000",
             chain_id=5042002,
-            usdc_address="0x2D270e6886d130D724215A266106e6832161EAEd",
+            usdc_address="0x3600000000000000000000000000000000000000",
             gateway_address="0x0077777d7eba4688bdef3e311b846f25870a19b9",
         )
         
@@ -541,7 +541,7 @@ class TestX402ResponseBuilding:
             seller_address="0x1234567890123456789012345678901234567890",
             amount="10000",
             chain_id=5042002,
-            usdc_address="0x2D270e6886d130D724215A266106e6832161EAEd",
+            usdc_address="0x3600000000000000000000000000000000000000",
             gateway_address="0x0077777d7eba4688bdef3e311b846f25870a19b9",
         )
         
@@ -585,7 +585,7 @@ class TestConcurrency:
         requirements = PaymentRequirements(
             scheme="exact",
             network="eip155:5042002",
-            asset="0x2D270e6886d130D724215A266106e6832161EAEd",
+            asset="0x3600000000000000000000000000000000000000",
             amount="10000",
             pay_to="0x1234567890123456789012345678901234567890",
         )
@@ -602,6 +602,299 @@ class TestConcurrency:
         
         # All should be unique (different nonces)
         assert len(set(signatures)) == 5
+
+
+# =============================================================================
+# TEST: Arc Testnet Native USDC Handling
+# =============================================================================
+
+class TestArcNativeUSDC:
+    """Test Arc Testnet's unique native USDC via sentinel contract."""
+    
+    def test_arc_usdc_is_sentinel_contract(self):
+        """Arc USDC address should be the sentinel contract."""
+        from circlekit.constants import CHAIN_CONFIGS
+        
+        arc_config = CHAIN_CONFIGS["arcTestnet"]
+        
+        # The sentinel contract address
+        expected = "0x3600000000000000000000000000000000000000"
+        assert arc_config.usdc_address == expected
+    
+    def test_arc_gateway_address_is_valid(self):
+        """Arc Gateway address should be valid."""
+        from circlekit.constants import CHAIN_CONFIGS
+        
+        arc_config = CHAIN_CONFIGS["arcTestnet"]
+        
+        # Gateway address should be checksum format
+        assert arc_config.gateway_address.startswith("0x")
+        assert len(arc_config.gateway_address) == 42
+    
+    def test_arc_chain_id_correct(self):
+        """Arc Testnet chain ID should be 5042002."""
+        from circlekit.constants import CHAIN_CONFIGS
+        
+        arc_config = CHAIN_CONFIGS["arcTestnet"]
+        assert arc_config.chain_id == 5042002
+    
+    def test_payment_requirements_for_arc(self):
+        """Payment requirements should use correct Arc network format."""
+        from circlekit.x402 import PaymentRequirements
+        from circlekit.constants import CHAIN_CONFIGS
+        
+        arc_config = CHAIN_CONFIGS["arcTestnet"]
+        
+        requirements = PaymentRequirements(
+            scheme="exact",
+            network=f"eip155:{arc_config.chain_id}",
+            asset=arc_config.usdc_address,
+            amount="100000",
+            pay_to="0x1234567890123456789012345678901234567890",
+            extra={
+                "name": "GatewayWalletBatched",
+                "version": "1",
+                "verifyingContract": arc_config.gateway_address,
+            },
+        )
+        
+        assert requirements.network == "eip155:5042002"
+        assert requirements.asset == "0x3600000000000000000000000000000000000000"
+
+
+# =============================================================================
+# TEST: Decimal Precision
+# =============================================================================
+
+class TestDecimalPrecision:
+    """Test USDC decimal handling (6 decimals)."""
+    
+    def test_parse_usdc_precision(self):
+        """USDC parsing should handle 6 decimals correctly."""
+        from circlekit.boa_utils import parse_usdc
+        
+        # Various precision levels
+        assert parse_usdc("1.0") == 1_000_000
+        assert parse_usdc("0.1") == 100_000
+        assert parse_usdc("0.01") == 10_000
+        assert parse_usdc("0.001") == 1_000
+        assert parse_usdc("0.0001") == 100
+        assert parse_usdc("0.00001") == 10
+        assert parse_usdc("0.000001") == 1
+    
+    def test_format_usdc_precision(self):
+        """USDC formatting should show 6 decimals."""
+        from circlekit.boa_utils import format_usdc
+        
+        # All should show 6 decimal places
+        assert "1.000000" in format_usdc(1_000_000)
+        assert "0.100000" in format_usdc(100_000)
+        assert "0.010000" in format_usdc(10_000)
+        assert "0.001000" in format_usdc(1_000)
+        assert "0.000100" in format_usdc(100)
+        assert "0.000010" in format_usdc(10)
+        assert "0.000001" in format_usdc(1)
+    
+    def test_round_trip_usdc(self):
+        """parse_usdc(format_usdc(x)) should equal x."""
+        from circlekit.boa_utils import parse_usdc, format_usdc
+        
+        test_values = [0, 1, 100, 1000, 1000000, 123456789]
+        
+        for val in test_values:
+            formatted = format_usdc(val)
+            parsed = parse_usdc(formatted)
+            assert parsed == val, f"Round trip failed: {val} -> {formatted} -> {parsed}"
+
+
+# =============================================================================
+# TEST: Network Format Parsing
+# =============================================================================
+
+class TestNetworkFormat:
+    """Test EIP-155 network format parsing."""
+    
+    def test_network_format_parsing(self):
+        """Should correctly parse eip155:chainId format."""
+        from circlekit.x402 import PaymentRequirements
+        
+        requirements = PaymentRequirements(
+            scheme="exact",
+            network="eip155:5042002",
+            asset="0x3600000000000000000000000000000000000000",
+            amount="100000",
+            pay_to="0x1234567890123456789012345678901234567890",
+        )
+        
+        assert requirements.chain_id == 5042002
+    
+    def test_various_chain_ids(self):
+        """Should handle various chain IDs."""
+        from circlekit.x402 import PaymentRequirements
+        
+        test_chain_ids = [1, 84532, 5042002, 11155111, 43113]
+        
+        for chain_id in test_chain_ids:
+            requirements = PaymentRequirements(
+                scheme="exact",
+                network=f"eip155:{chain_id}",
+                asset="0x3600000000000000000000000000000000000000",
+                amount="100000",
+                pay_to="0x1234567890123456789012345678901234567890",
+            )
+            
+            assert requirements.chain_id == chain_id
+
+
+# =============================================================================
+# TEST: Nonce Generation
+# =============================================================================
+
+class TestNonceGeneration:
+    """Test nonce generation for replay protection."""
+    
+    def test_nonces_are_unique(self):
+        """Generated nonces should be unique."""
+        from circlekit.boa_utils import generate_nonce
+        
+        nonces = [generate_nonce() for _ in range(1000)]
+        
+        # All should be unique
+        assert len(set(nonces)) == 1000
+    
+    def test_nonce_is_bytes32(self):
+        """Nonces should be 32 bytes (256 bits)."""
+        from circlekit.boa_utils import generate_nonce
+        
+        nonce = generate_nonce()
+        
+        # generate_nonce() returns bytes
+        assert isinstance(nonce, bytes)
+        
+        # Should be exactly 32 bytes
+        assert len(nonce) == 32
+    
+    def test_nonce_is_random(self):
+        """Nonces should have good randomness."""
+        from circlekit.boa_utils import generate_nonce
+        
+        # Generate 100 nonces
+        nonces = [generate_nonce().hex() for _ in range(100)]
+        
+        # Calculate average character distribution
+        # In truly random hex, each char should appear ~1/16 of the time
+        all_chars = "".join(nonces)
+        
+        # Check that we see a variety of hex digits
+        unique_chars = set(all_chars.lower())
+        
+        # Should see at least 12 of 16 possible hex digits (statistically)
+        assert len(unique_chars) >= 12, f"Poor randomness: only {len(unique_chars)} unique chars"
+
+
+# =============================================================================
+# TEST: Address Validation
+# =============================================================================
+
+class TestAddressValidation:
+    """Test Ethereum address handling."""
+    
+    def test_valid_addresses_accepted(self):
+        """Valid Ethereum addresses should be accepted."""
+        from circlekit.x402 import PaymentRequirements
+        
+        valid_addresses = [
+            "0x0000000000000000000000000000000000000000",
+            "0x1234567890abcdef1234567890abcdef12345678",
+            "0xABCDEF1234567890abcdef1234567890ABCDEF12",
+        ]
+        
+        for addr in valid_addresses:
+            requirements = PaymentRequirements(
+                scheme="exact",
+                network="eip155:5042002",
+                asset=addr,
+                amount="100000",
+                pay_to=addr,
+            )
+            assert requirements.pay_to == addr
+    
+    def test_client_derives_address_correctly(self):
+        """Client should derive correct address from private key."""
+        from circlekit import GatewayClient
+        
+        # Known private key / address pair
+        pk = "0x0000000000000000000000000000000000000000000000000000000000000001"
+        expected_addr = "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf"
+        
+        client = GatewayClient(chain="arcTestnet", private_key=pk)
+        
+        assert client.address.lower() == expected_addr.lower()
+
+
+# =============================================================================
+# TEST: HTTP Header Format
+# =============================================================================
+
+class TestHTTPHeaderFormat:
+    """Test X-PAYMENT header format compliance."""
+    
+    def test_header_is_valid_base64(self):
+        """Payment header should be valid base64."""
+        from circlekit.x402 import create_payment_header, PaymentRequirements
+        
+        requirements = PaymentRequirements(
+            scheme="exact",
+            network="eip155:5042002",
+            asset="0x3600000000000000000000000000000000000000",
+            amount="10000",
+            pay_to="0x1234567890123456789012345678901234567890",
+        )
+        
+        header = create_payment_header(
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+            payer_address="0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf",
+            requirements=requirements,
+        )
+        
+        # Should not raise
+        decoded = base64.b64decode(header)
+        
+        # Should be valid JSON
+        data = json.loads(decoded)
+        
+        assert isinstance(data, dict)
+    
+    def test_decoded_header_has_required_fields(self):
+        """Decoded header should have all required fields."""
+        from circlekit.x402 import create_payment_header, decode_payment_header, PaymentRequirements
+        
+        requirements = PaymentRequirements(
+            scheme="exact",
+            network="eip155:5042002",
+            asset="0x3600000000000000000000000000000000000000",
+            amount="10000",
+            pay_to="0x1234567890123456789012345678901234567890",
+        )
+        
+        header = create_payment_header(
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+            payer_address="0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf",
+            requirements=requirements,
+        )
+        
+        decoded = decode_payment_header(header)
+        
+        # Check required fields in the payment payload
+        # The decoded header contains the payment payload directly
+        assert "signature" in decoded
+        assert "authorization" in decoded
+        
+        authorization = decoded["authorization"]
+        assert "from" in authorization
+        assert "to" in authorization
+        assert "value" in authorization
+        assert "nonce" in authorization
 
 
 # =============================================================================

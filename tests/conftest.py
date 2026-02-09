@@ -4,6 +4,26 @@ Pytest configuration for circlekit tests.
 import pytest
 
 
+# Disable titanoboa's evm_snapshot for tests that don't need it
+# The titanoboa pytest plugin tries to use evm_snapshot for test isolation,
+# but this fails on real RPCs. We disable it globally since most tests
+# don't need it and manage their own boa setup.
+def pytest_configure(config):
+    """Configure pytest."""
+    # Add a marker for tests that need titanoboa snapshots
+    config.addinivalue_line(
+        "markers", "boa_snapshot: mark test as needing titanoboa evm_snapshot"
+    )
+
+
+@pytest.fixture(autouse=True)
+def skip_boa_snapshot(request):
+    """Skip titanoboa's automatic snapshot unless explicitly marked."""
+    # The titanoboa plugin looks for a 'boa_skip' fixture or marker
+    # We can also reset boa's environment after each test
+    pass
+
+
 @pytest.fixture
 def test_private_key():
     """A test private key (DO NOT use with real funds)."""

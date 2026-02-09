@@ -38,7 +38,7 @@ class TestConstants:
         # Verified RPC from dRPC
         assert "arc-testnet.drpc.org" in arc.rpc_url
         # Verified USDC address
-        assert arc.usdc_address == "0x2D270e6886d130D724215A266106e6832161EAEd"
+        assert arc.usdc_address == "0x3600000000000000000000000000000000000000"
         assert arc.gateway_address == "0x0077777d7eba4688bdef3e311b846f25870a19b9"
         assert arc.gateway_domain == 26  # Verified domain
         assert arc.is_testnet == True
