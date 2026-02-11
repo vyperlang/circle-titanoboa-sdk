@@ -1,8 +1,8 @@
 """
 Titanoboa utilities for Circle Gateway interactions.
 
-This module provides helpers for using titanoboa (boa) for all on-chain
-interactions instead of web3.py. It handles:
+This module provides helpers for using titanoboa (boa) for on-chain
+interactions. It handles:
 - RPC connection management
 - Contract loading and interaction
 - Transaction building and signing

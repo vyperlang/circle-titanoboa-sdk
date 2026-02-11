@@ -1,5 +1,5 @@
 """
-Constants for Circle Gateway x402 protocol.
+Constants for x402 batching via Circle Gateway.
 
 These match the TypeScript SDK's CHAIN_CONFIGS, GATEWAY_DOMAINS, etc.
 from @circlefin/x402-batching v1.0.1.

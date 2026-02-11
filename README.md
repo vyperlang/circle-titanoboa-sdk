@@ -1,6 +1,6 @@
 # circle-titanoboa-sdk
 
-Python SDK for Circle's x402 Protocol and Gateway API. Uses **titanoboa** for all on-chain interactions (no web3.py).
+Python SDK for x402 with Circle Gateway batching and API access. Uses **titanoboa** for on-chain interactions.
 
 > Built for the [Vyper](https://github.com/vyperlang/vyper) ecosystem. Port of Circle's TypeScript SDK (`@circlefin/x402-batching`).
 
@@ -25,7 +25,7 @@ User Request -> 402 Payment Required -> Sign Message (free) -> Access Granted
 - **Gateway Middleware** - Framework-agnostic middleware for paywalled endpoints
 - **Multi-chain** - Arc, Base, Ethereum, Avalanche, Polygon, Optimism, and more (testnets + mainnets)
 - **Arc Testnet** - Circle's L2 where USDC is the native gas token
-- **Pure titanoboa** - No web3.py dependency
+- **Titanoboa-based** - On-chain interactions via titanoboa
 
 ## Circle Products Used
 

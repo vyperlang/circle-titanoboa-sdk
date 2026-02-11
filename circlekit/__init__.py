@@ -1,5 +1,5 @@
 """
-circlekit - Python SDK for Circle's x402 Batching and Gateway APIs
+circlekit - Python SDK for x402 batching with Circle Gateway APIs
 
 This SDK provides Python equivalents to Circle's TypeScript SDK
 (@circlefin/x402-batching) using titanoboa for all on-chain interactions.

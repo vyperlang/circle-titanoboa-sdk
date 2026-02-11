@@ -1,5 +1,5 @@
 """
-x402 Protocol implementation for Circle Gateway.
+x402 protocol implementation for Circle Gateway batching.
 
 This module handles:
 - Parsing 402 Payment Required responses
