@@ -153,6 +153,33 @@ gateway = create_gateway_middleware(
 The 402 response will include one `accepts` entry per network, and incoming
 payments will be validated against the accepted set.
 
+### Using with Standard x402
+
+If you already use the [`x402` Python package](https://github.com/coinbase/x402/tree/main/python), add Circle Gateway as a facilitator:
+
+```bash
+pip install circlekit[x402]
+```
+
+```python
+from circlekit.x402_integration import create_resource_server
+
+server = create_resource_server(is_testnet=True)
+server.initialize()
+
+# Use with FastAPI, Flask, or any x402 middleware
+```
+
+Or use `BatchFacilitatorClient` directly with `x402ResourceServer`:
+
+```python
+from x402.server import x402ResourceServer
+from circlekit import BatchFacilitatorClient
+
+server = x402ResourceServer(BatchFacilitatorClient())
+server.initialize()
+```
+
 ---
 
 ## Using with Vyper Contracts

@@ -56,6 +56,9 @@ from circlekit.constants import (
     CIRCLE_BATCHING_SCHEME,
 )
 
+# x402 integration (x402 package is imported lazily inside create_resource_server)
+from circlekit.x402_integration import create_resource_server
+
 __all__ = [
     # Client
     "GatewayClient",
@@ -83,4 +86,6 @@ __all__ = [
     "CIRCLE_BATCHING_NAME",
     "CIRCLE_BATCHING_VERSION",
     "CIRCLE_BATCHING_SCHEME",
+    # x402 integration (optional)
+    "create_resource_server",
 ]
