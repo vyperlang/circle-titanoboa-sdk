@@ -4,13 +4,8 @@ Pytest configuration for circlekit tests.
 import pytest
 
 
-# Disable titanoboa's evm_snapshot for tests that don't need it
-# The titanoboa pytest plugin tries to use evm_snapshot for test isolation,
-# but this fails on real RPCs. We disable it globally since most tests
-# don't need it and manage their own boa setup.
 def pytest_configure(config):
     """Configure pytest."""
-    # Add a marker for tests that need titanoboa snapshots
     config.addinivalue_line(
         "markers", "boa_snapshot: mark test as needing titanoboa evm_snapshot"
     )
@@ -19,8 +14,6 @@ def pytest_configure(config):
 @pytest.fixture(autouse=True)
 def skip_boa_snapshot(request):
     """Skip titanoboa's automatic snapshot unless explicitly marked."""
-    # The titanoboa plugin looks for a 'boa_skip' fixture or marker
-    # We can also reset boa's environment after each test
     pass
 
 
@@ -40,19 +33,23 @@ def test_address():
 def sample_402_response():
     """Sample x402 response body for testing."""
     return {
+        "x402Version": 2,
+        "resource": {"url": "/api/test"},
         "accepts": [
             {
-                "network": "arcTestnet",
-                "address": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
-                "amount": "10000",
+                "scheme": "exact",
+                "network": "eip155:5042002",
                 "asset": "0x3600000000000000000000000000000000000000",
+                "amount": "10000",
+                "payTo": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+                "maxTimeoutSeconds": 345600,
                 "extra": {
-                    "name": "Test API",
-                    "version": "1"
-                }
+                    "name": "GatewayWalletBatched",
+                    "version": "1",
+                    "verifyingContract": "0x0077777d7EBA4688BDeF3E311b846F25870A19B9",
+                },
             }
         ],
-        "error": None
     }
 
 

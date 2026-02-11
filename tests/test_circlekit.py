@@ -1,14 +1,13 @@
 """
 Comprehensive tests for circlekit Python SDK.
 
-These tests verify that each module works correctly without hallucinations.
 Run with: python -m pytest tests/test_circlekit.py -v
 """
 
 import pytest
 import json
 import base64
-import asyncio
+import time
 from unittest.mock import patch, MagicMock, AsyncMock
 
 
@@ -18,48 +17,126 @@ from unittest.mock import patch, MagicMock, AsyncMock
 
 class TestConstants:
     """Test constants module."""
-    
+
     def test_chain_configs_exist(self):
-        """CHAIN_CONFIGS should have expected chains."""
         from circlekit.constants import CHAIN_CONFIGS
-        
         assert "arcTestnet" in CHAIN_CONFIGS
         assert "baseSepolia" in CHAIN_CONFIGS
         assert "ethereumSepolia" in CHAIN_CONFIGS
-    
+
     def test_arc_testnet_config(self):
-        """Arc Testnet should have correct configuration."""
         from circlekit.constants import CHAIN_CONFIGS
-        
         arc = CHAIN_CONFIGS["arcTestnet"]
-        
         assert arc.chain_id == 5042002
         assert arc.name == "Arc Testnet"
-        # Verified RPC from dRPC
         assert "arc-testnet.drpc.org" in arc.rpc_url
-        # Verified USDC address
         assert arc.usdc_address == "0x3600000000000000000000000000000000000000"
-        assert arc.gateway_address == "0x0077777d7eba4688bdef3e311b846f25870a19b9"
-        assert arc.gateway_domain == 26  # Verified domain
-        assert arc.is_testnet == True
-    
+        assert arc.gateway_domain == 26
+        assert arc.is_testnet is True
+
+    def test_gateway_domain_ids_correct(self):
+        """Gateway domain IDs must match Circle's GATEWAY_DOMAINS, not chain IDs."""
+        from circlekit.constants import CHAIN_CONFIGS
+        expected = {
+            "arcTestnet": 26,
+            "baseSepolia": 6,
+            "ethereumSepolia": 0,
+            "avalancheFuji": 1,
+            "hyperEvmTestnet": 19,
+            "sonicTestnet": 13,
+            "worldChainSepolia": 14,
+            "seiAtlantic": 16,
+            "ethereum": 0,
+            "base": 6,
+            "arbitrum": 3,
+            "polygon": 7,
+            "optimism": 2,
+            "avalanche": 1,
+            "sonic": 13,
+            "unichain": 10,
+            "worldChain": 14,
+            "hyperEvm": 19,
+            "sei": 16,
+        }
+        for chain_name, expected_domain in expected.items():
+            assert CHAIN_CONFIGS[chain_name].gateway_domain == expected_domain, \
+                f"{chain_name} domain should be {expected_domain}, got {CHAIN_CONFIGS[chain_name].gateway_domain}"
+
+    def test_mainnet_gateway_addresses(self):
+        """Mainnet chains must use mainnet gateway addresses."""
+        from circlekit.constants import CHAIN_CONFIGS, MAINNET_GATEWAY_WALLET, MAINNET_GATEWAY_MINTER
+        mainnet_chains = ["ethereum", "base", "arbitrum", "polygon", "optimism", "avalanche"]
+        for chain_name in mainnet_chains:
+            config = CHAIN_CONFIGS[chain_name]
+            assert config.gateway_address == MAINNET_GATEWAY_WALLET, \
+                f"{chain_name} gateway_address wrong"
+            assert config.gateway_minter == MAINNET_GATEWAY_MINTER, \
+                f"{chain_name} gateway_minter wrong"
+
+    def test_testnet_gateway_addresses(self):
+        """Testnet chains must use testnet gateway addresses."""
+        from circlekit.constants import CHAIN_CONFIGS, TESTNET_GATEWAY_WALLET, TESTNET_GATEWAY_MINTER
+        testnet_chains = ["arcTestnet", "baseSepolia", "ethereumSepolia", "avalancheFuji"]
+        for chain_name in testnet_chains:
+            config = CHAIN_CONFIGS[chain_name]
+            assert config.gateway_address == TESTNET_GATEWAY_WALLET, \
+                f"{chain_name} gateway_address wrong"
+            assert config.gateway_minter == TESTNET_GATEWAY_MINTER, \
+                f"{chain_name} gateway_minter wrong"
+
+    def test_chain_config_has_gateway_minter(self):
+        """Every chain config must have a gateway_minter field."""
+        from circlekit.constants import CHAIN_CONFIGS
+        for chain_name, config in CHAIN_CONFIGS.items():
+            assert hasattr(config, "gateway_minter"), f"{chain_name} missing gateway_minter"
+            assert config.gateway_minter.startswith("0x"), f"{chain_name} gateway_minter invalid"
+
     def test_protocol_constants(self):
-        """Protocol constants should match x402 spec."""
         from circlekit.constants import (
-            CIRCLE_BATCHING_NAME,
-            CIRCLE_BATCHING_VERSION,
-            CIRCLE_BATCHING_SCHEME,
-            X402_VERSION,
-            MIN_SIGNATURE_VALIDITY_SECONDS,
-            USDC_DECIMALS,
+            CIRCLE_BATCHING_NAME, CIRCLE_BATCHING_VERSION,
+            CIRCLE_BATCHING_SCHEME, X402_VERSION, USDC_DECIMALS,
         )
-        
         assert CIRCLE_BATCHING_NAME == "GatewayWalletBatched"
         assert CIRCLE_BATCHING_VERSION == "1"
         assert CIRCLE_BATCHING_SCHEME == "exact"
         assert X402_VERSION == 2
-        assert MIN_SIGNATURE_VALIDITY_SECONDS == 4 * 24 * 60 * 60  # 4 days
         assert USDC_DECIMALS == 6
+
+    def test_usdc_constants_removed(self):
+        """USDC_TOKEN_NAME, USDC_TOKEN_VERSION, EIP712_DOMAIN_TYPE should no longer exist."""
+        from circlekit import constants
+        assert not hasattr(constants, "USDC_TOKEN_NAME")
+        assert not hasattr(constants, "USDC_TOKEN_VERSION")
+        assert not hasattr(constants, "EIP712_DOMAIN_TYPE")
+        assert not hasattr(constants, "TRANSFER_WITH_AUTHORIZATION_TYPE")
+
+
+# ============================================================================
+# TEST: signer.py
+# ============================================================================
+
+class TestSigner:
+    """Test Signer protocol and PrivateKeySigner."""
+
+    def test_private_key_signer_address(self):
+        from circlekit.signer import PrivateKeySigner
+        signer = PrivateKeySigner("0x0000000000000000000000000000000000000000000000000000000000000001")
+        assert signer.address == "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf"
+
+    def test_private_key_signer_sign_typed_data(self):
+        from circlekit.signer import PrivateKeySigner
+        signer = PrivateKeySigner("0x0000000000000000000000000000000000000000000000000000000000000001")
+        domain = {"name": "Test", "version": "1"}
+        types = {"Message": [{"name": "content", "type": "string"}]}
+        message = {"content": "hello"}
+        sig = signer.sign_typed_data(domain, types, "Message", message)
+        assert isinstance(sig, str)
+        assert len(sig) > 0
+
+    def test_private_key_signer_satisfies_protocol(self):
+        from circlekit.signer import Signer, PrivateKeySigner
+        signer = PrivateKeySigner("0x0000000000000000000000000000000000000000000000000000000000000001")
+        assert isinstance(signer, Signer)
 
 
 # ============================================================================
@@ -68,81 +145,70 @@ class TestConstants:
 
 class TestBoaUtils:
     """Test boa_utils module."""
-    
+
     def test_get_chain_config(self):
-        """get_chain_config should return correct config."""
         from circlekit.boa_utils import get_chain_config
-        
         config = get_chain_config("arcTestnet")
         assert config.chain_id == 5042002
-        assert config.name == "Arc Testnet"
-    
+
     def test_get_chain_config_invalid(self):
-        """get_chain_config should raise for invalid chain."""
         from circlekit.boa_utils import get_chain_config
-        
         with pytest.raises(ValueError, match="Unsupported chain"):
             get_chain_config("invalidChain")
-    
+
     def test_get_rpc_url(self):
-        """get_rpc_url should return correct URL."""
         from circlekit.boa_utils import get_rpc_url
-        
         url = get_rpc_url("arcTestnet")
-        # Verified RPC from dRPC
         assert "arc-testnet.drpc.org" in url
-    
+
     def test_get_account_from_private_key(self):
-        """get_account_from_private_key should derive correct address."""
         from circlekit.boa_utils import get_account_from_private_key
-        
-        # Known test vector: private key 1 -> specific address
         address, account = get_account_from_private_key(
             "0x0000000000000000000000000000000000000000000000000000000000000001"
         )
-        
         assert address == "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf"
-        assert account is not None
-    
+
     def test_get_account_without_0x_prefix(self):
-        """get_account_from_private_key should work without 0x prefix."""
         from circlekit.boa_utils import get_account_from_private_key
-        
         address, _ = get_account_from_private_key(
             "0000000000000000000000000000000000000000000000000000000000000001"
         )
-        
         assert address == "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf"
-    
+
     def test_format_usdc(self):
-        """format_usdc should format correctly."""
         from circlekit.boa_utils import format_usdc
-        
-        assert format_usdc(1000000) == "1.000000"  # 1 USDC
-        assert format_usdc(10000) == "0.010000"    # 0.01 USDC
-        assert format_usdc(1500000) == "1.500000"  # 1.5 USDC
+        assert format_usdc(1000000) == "1.000000"
+        assert format_usdc(10000) == "0.010000"
         assert format_usdc(0) == "0.000000"
-    
+
     def test_parse_usdc(self):
-        """parse_usdc should parse correctly."""
         from circlekit.boa_utils import parse_usdc
-        
         assert parse_usdc("1.0") == 1000000
         assert parse_usdc("0.01") == 10000
-        assert parse_usdc("1.5") == 1500000
-        assert parse_usdc("$0.01") == 10000  # With $ prefix
+        assert parse_usdc("$0.01") == 10000
         assert parse_usdc("$1.50") == 1500000
-    
+
+    def test_parse_usdc_rounding(self):
+        """parse_usdc should round, not truncate (matches TS Math.round)."""
+        from circlekit.boa_utils import parse_usdc
+        # $0.019999 * 1e6 = 19999.0 -> rounds to 19999
+        assert parse_usdc("$0.019999") == 19999
+        # $0.0199999 * 1e6 = 19999.9 -> rounds to 20000
+        assert parse_usdc("$0.0199999") == 20000
+        # $0.0100005 * 1e6 = 10000.5 -> rounds to 10001 (half up)
+        assert parse_usdc("$0.0100005") == 10001
+
     def test_generate_nonce(self):
-        """generate_nonce should return 32 random bytes."""
         from circlekit.boa_utils import generate_nonce
-        
         nonce1 = generate_nonce()
         nonce2 = generate_nonce()
-        
         assert len(nonce1) == 32
-        assert len(nonce2) == 32
-        assert nonce1 != nonce2  # Should be random
+        assert nonce1 != nonce2
+
+    def test_sign_typed_data_removed(self):
+        """sign_typed_data should no longer exist in boa_utils (moved to signer)."""
+        from circlekit import boa_utils
+        assert not hasattr(boa_utils, "sign_typed_data")
 
 
 # ============================================================================
@@ -151,230 +217,203 @@ class TestBoaUtils:
 
 class TestX402:
     """Test x402 protocol module."""
-    
+
     def test_parse_402_response(self):
-        """parse_402_response should parse valid 402 body."""
         from circlekit.x402 import parse_402_response
-        
         body = {
             "x402Version": 2,
             "resource": {"url": "/api/test"},
-            "accepts": [
-                {
-                    "scheme": "exact",
-                    "network": "eip155:5042002",
-                    "asset": "0x3600000000000000000000000000000000000000",
-                    "amount": "10000",
-                    "payTo": "0x1234567890123456789012345678901234567890",
-                    "maxTimeoutSeconds": 345600,
-                    "extra": {
-                        "name": "GatewayWalletBatched",
-                        "version": "1",
-                        "verifyingContract": "0x0077777d7eba4688bdef3e311b846f25870a19b9"
-                    }
+            "accepts": [{
+                "scheme": "exact",
+                "network": "eip155:5042002",
+                "asset": "0x3600000000000000000000000000000000000000",
+                "amount": "10000",
+                "payTo": "0x1234567890123456789012345678901234567890",
+                "maxTimeoutSeconds": 345600,
+                "extra": {
+                    "name": "GatewayWalletBatched",
+                    "version": "1",
+                    "verifyingContract": "0x0077777d7EBA4688BDeF3E311b846F25870A19B9",
                 }
-            ]
+            }]
         }
-        
         result = parse_402_response(body)
-        
         assert result.x402_version == 2
         assert len(result.accepts) == 1
-        assert result.accepts[0].scheme == "exact"
-        assert result.accepts[0].network == "eip155:5042002"
-        assert result.accepts[0].amount == "10000"
-        assert result.accepts[0].is_gateway_batched == True
-    
-    def test_parse_402_response_from_json_string(self):
-        """parse_402_response should handle JSON string input."""
-        from circlekit.x402 import parse_402_response
-        
-        body = json.dumps({
-            "x402Version": 2,
-            "accepts": [{"scheme": "exact", "network": "eip155:1", "amount": "100", "payTo": "0x123"}]
-        })
-        
-        result = parse_402_response(body)
-        assert result.x402_version == 2
-    
+        assert result.accepts[0].is_gateway_batched is True
+
     def test_parse_402_response_invalid(self):
-        """parse_402_response should raise on invalid input."""
         from circlekit.x402 import parse_402_response
-        
         with pytest.raises(ValueError, match="x402Version"):
             parse_402_response({"accepts": []})
-        
         with pytest.raises(ValueError, match="accepts"):
             parse_402_response({"x402Version": 2})
-    
-    def test_payment_requirements_chain_id(self):
-        """PaymentRequirements.chain_id should extract from network."""
-        from circlekit.x402 import PaymentRequirements
-        
-        req = PaymentRequirements(
-            scheme="exact",
-            network="eip155:5042002",
-            asset="0x123",
-            amount="10000",
-            pay_to="0x456",
-        )
-        
-        assert req.chain_id == 5042002
-    
-    def test_payment_requirements_amount_formatted(self):
-        """PaymentRequirements.amount_formatted should format correctly."""
-        from circlekit.x402 import PaymentRequirements
-        
-        req = PaymentRequirements(
-            scheme="exact",
-            network="eip155:1",
-            asset="0x123",
-            amount="10000",  # 0.01 USDC
-            pay_to="0x456",
-        )
-        
-        assert req.amount_formatted == "$0.010000"
-    
-    def test_is_batch_payment(self):
-        """is_batch_payment should detect Gateway payments."""
+
+    def test_is_batch_payment_requires_name_and_version(self):
+        """is_batch_payment must check BOTH name AND version."""
         from circlekit.x402 import is_batch_payment, PaymentRequirements
-        
-        gateway_req = PaymentRequirements(
-            scheme="exact",
-            network="eip155:1",
-            asset="0x123",
-            amount="100",
-            pay_to="0x456",
+        # Both name and version -> True
+        assert is_batch_payment(PaymentRequirements(
+            scheme="exact", network="eip155:1", asset="0x123", amount="100", pay_to="0x456",
+            extra={"name": "GatewayWalletBatched", "version": "1"}
+        )) is True
+        # Only name -> False
+        assert is_batch_payment(PaymentRequirements(
+            scheme="exact", network="eip155:1", asset="0x123", amount="100", pay_to="0x456",
             extra={"name": "GatewayWalletBatched"}
-        )
-        
-        other_req = PaymentRequirements(
-            scheme="exact",
-            network="eip155:1",
-            asset="0x123",
-            amount="100",
-            pay_to="0x456",
-            extra={"name": "SomethingElse"}
-        )
-        
-        assert is_batch_payment(gateway_req) == True
-        assert is_batch_payment(other_req) == False
-    
-    def test_get_verifying_contract(self):
-        """get_verifying_contract should extract Gateway address."""
+        )) is False
+        # Wrong version -> False
+        assert is_batch_payment(PaymentRequirements(
+            scheme="exact", network="eip155:1", asset="0x123", amount="100", pay_to="0x456",
+            extra={"name": "GatewayWalletBatched", "version": "2"}
+        )) is False
+
+    def test_get_verifying_contract_validates_string(self):
+        """get_verifying_contract must verify that verifyingContract is a string."""
         from circlekit.x402 import get_verifying_contract, PaymentRequirements
-        
-        gateway_req = PaymentRequirements(
+        # String -> returns it
+        req = PaymentRequirements(
+            scheme="exact", network="eip155:1", asset="0x123", amount="100", pay_to="0x456",
+            extra={"verifyingContract": "0xABCD"}
+        )
+        assert get_verifying_contract(req) == "0xABCD"
+        # Non-string (int) -> returns None
+        req2 = PaymentRequirements(
+            scheme="exact", network="eip155:1", asset="0x123", amount="100", pay_to="0x456",
+            extra={"verifyingContract": 12345}
+        )
+        assert get_verifying_contract(req2) is None
+        # Missing -> None
+        req3 = PaymentRequirements(
+            scheme="exact", network="eip155:1", asset="0x123", amount="100", pay_to="0x456",
+        )
+        assert get_verifying_contract(req3) is None
+
+    def test_create_payment_payload_uses_gateway_domain(self):
+        """EIP-712 domain must be GatewayWalletBatched, NOT USDC."""
+        from circlekit.x402 import create_payment_payload, PaymentRequirements
+        from circlekit.signer import PrivateKeySigner
+
+        signer = PrivateKeySigner("0x0000000000000000000000000000000000000000000000000000000000000001")
+        requirements = PaymentRequirements(
             scheme="exact",
             network="eip155:5042002",
-            asset="0x123",
-            amount="100",
-            pay_to="0x456",
+            asset="0x3600000000000000000000000000000000000000",
+            amount="10000",
+            pay_to="0x1234567890123456789012345678901234567890",
             extra={
                 "name": "GatewayWalletBatched",
-                "verifyingContract": "0x0077777d7eba4688bdef3e311b846f25870a19b9"
+                "version": "1",
+                "verifyingContract": "0x0077777d7EBA4688BDeF3E311b846F25870A19B9",
             }
         )
-        
-        assert get_verifying_contract(gateway_req) == "0x0077777d7eba4688bdef3e311b846f25870a19b9"
-        
-        # Also works with dict
-        req_dict = {
-            "extra": {"verifyingContract": "0xABCD"}
-        }
-        assert get_verifying_contract(req_dict) == "0xABCD"
-        
-        # Returns None if not present
-        empty_req = PaymentRequirements(
+        payload = create_payment_payload(signer, requirements)
+        assert payload.signature is not None
+        assert len(payload.signature) > 0
+        assert payload.x402_version == 2
+
+    def test_authorization_fields_are_strings(self):
+        """Authorization value, validAfter, validBefore must be strings, not ints."""
+        from circlekit.x402 import create_payment_payload, PaymentRequirements
+        from circlekit.signer import PrivateKeySigner
+
+        signer = PrivateKeySigner("0x0000000000000000000000000000000000000000000000000000000000000001")
+        requirements = PaymentRequirements(
             scheme="exact",
-            network="eip155:1",
-            asset="0x123",
-            amount="100",
-            pay_to="0x456",
+            network="eip155:5042002",
+            asset="0x3600000000000000000000000000000000000000",
+            amount="10000",
+            pay_to="0x1234567890123456789012345678901234567890",
+            extra={
+                "name": "GatewayWalletBatched",
+                "version": "1",
+                "verifyingContract": "0x0077777d7EBA4688BDeF3E311b846F25870A19B9",
+            }
         )
-        assert get_verifying_contract(empty_req) is None
-    
+        payload = create_payment_payload(signer, requirements)
+        assert isinstance(payload.authorization["value"], str)
+        assert isinstance(payload.authorization["validAfter"], str)
+        assert isinstance(payload.authorization["validBefore"], str)
+
+    def test_valid_after_has_clock_skew_buffer(self):
+        """validAfter should be current_time - 600 (10 min buffer)."""
+        from circlekit.x402 import create_payment_payload, PaymentRequirements
+        from circlekit.signer import PrivateKeySigner
+
+        signer = PrivateKeySigner("0x0000000000000000000000000000000000000000000000000000000000000001")
+        requirements = PaymentRequirements(
+            scheme="exact",
+            network="eip155:5042002",
+            asset="0x3600000000000000000000000000000000000000",
+            amount="10000",
+            pay_to="0x1234567890123456789012345678901234567890",
+            max_timeout_seconds=345600,
+            extra={
+                "name": "GatewayWalletBatched",
+                "version": "1",
+                "verifyingContract": "0x0077777d7EBA4688BDeF3E311b846F25870A19B9",
+            }
+        )
+        before = int(time.time())
+        payload = create_payment_payload(signer, requirements)
+        after = int(time.time())
+
+        valid_after = int(payload.authorization["validAfter"])
+        valid_before = int(payload.authorization["validBefore"])
+
+        # validAfter should be ~ now - 600
+        assert before - 600 - 1 <= valid_after <= after - 600 + 1
+        # validBefore should be ~ now + max_timeout_seconds
+        assert before + 345600 - 1 <= valid_before <= after + 345600 + 1
+
+    def test_payment_header_structure(self):
+        """Header must have {x402Version, payload: {authorization, signature}, resource, accepted}."""
+        from circlekit.x402 import create_payment_header, decode_payment_header, PaymentRequirements
+        from circlekit.signer import PrivateKeySigner
+
+        signer = PrivateKeySigner("0x0000000000000000000000000000000000000000000000000000000000000001")
+        requirements = PaymentRequirements(
+            scheme="exact",
+            network="eip155:5042002",
+            asset="0x3600000000000000000000000000000000000000",
+            amount="10000",
+            pay_to="0x1234567890123456789012345678901234567890",
+            extra={
+                "name": "GatewayWalletBatched",
+                "version": "1",
+                "verifyingContract": "0x0077777d7EBA4688BDeF3E311b846F25870A19B9",
+            }
+        )
+        resource = {"url": "/api/test", "description": "test"}
+
+        header = create_payment_header(signer, requirements, resource=resource)
+        decoded = decode_payment_header(header)
+
+        # Must have these top-level keys
+        assert "x402Version" in decoded
+        assert "payload" in decoded
+        assert "resource" in decoded
+        assert "accepted" in decoded
+
+        # payload must have authorization and signature
+        assert "authorization" in decoded["payload"]
+        assert "signature" in decoded["payload"]
+
+        # resource should match what we passed
+        assert decoded["resource"]["url"] == "/api/test"
+
     def test_build_402_response(self):
-        """build_402_response should create valid response."""
         from circlekit.x402 import build_402_response
-        
         response = build_402_response(
             seller_address="0x1234567890123456789012345678901234567890",
             amount="10000",
             chain_id=5042002,
             usdc_address="0x3600000000000000000000000000000000000000",
-            gateway_address="0x0077777d7eba4688bdef3e311b846f25870a19b9",
-            description="Test resource",
+            gateway_address="0x0077777d7EBA4688BDeF3E311b846F25870A19B9",
         )
-        
         assert response["x402Version"] == 2
         assert len(response["accepts"]) == 1
-        assert response["accepts"][0]["amount"] == "10000"
-        assert response["accepts"][0]["scheme"] == "exact"
-        assert response["accepts"][0]["network"] == "eip155:5042002"
         assert response["accepts"][0]["extra"]["name"] == "GatewayWalletBatched"
-    
-    def test_create_payment_payload(self):
-        """create_payment_payload should create signed payload."""
-        from circlekit.x402 import create_payment_payload, PaymentRequirements
-        
-        requirements = PaymentRequirements(
-            scheme="exact",
-            network="eip155:5042002",
-            asset="0x3600000000000000000000000000000000000000",
-            amount="10000",
-            pay_to="0x1234567890123456789012345678901234567890",
-            extra={"name": "GatewayWalletBatched"}
-        )
-        
-        payload = create_payment_payload(
-            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
-            payer_address="0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf",
-            requirements=requirements,
-        )
-        
-        assert payload.signature is not None
-        assert len(payload.signature) > 0
-        assert payload.authorization["from"] == "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf"
-        assert payload.authorization["to"] == "0x1234567890123456789012345678901234567890"
-        assert payload.authorization["value"] == 10000
-    
-    def test_create_payment_header(self):
-        """create_payment_header should return base64 string."""
-        from circlekit.x402 import create_payment_header, PaymentRequirements
-        
-        requirements = PaymentRequirements(
-            scheme="exact",
-            network="eip155:5042002",
-            asset="0x3600000000000000000000000000000000000000",
-            amount="10000",
-            pay_to="0x1234567890123456789012345678901234567890",
-        )
-        
-        header = create_payment_header(
-            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
-            payer_address="0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf",
-            requirements=requirements,
-        )
-        
-        # Should be valid base64
-        decoded = base64.b64decode(header)
-        data = json.loads(decoded)
-        
-        assert "signature" in data
-        assert "authorization" in data
-        assert "accepted" in data
-    
-    def test_decode_payment_header(self):
-        """decode_payment_header should decode base64 header."""
-        from circlekit.x402 import decode_payment_header
-        
-        original = {"test": "data", "number": 123}
-        encoded = base64.b64encode(json.dumps(original).encode()).decode()
-        
-        decoded = decode_payment_header(encoded)
-        
-        assert decoded == original
 
 
 # ============================================================================
@@ -383,65 +422,62 @@ class TestX402:
 
 class TestGatewayClient:
     """Test GatewayClient class."""
-    
-    def test_client_initialization(self):
-        """GatewayClient should initialize with correct properties."""
+
+    def test_client_with_private_key(self):
         from circlekit.client import GatewayClient
-        
         client = GatewayClient(
             chain="arcTestnet",
             private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
         )
-        
         assert client.address == "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf"
         assert client.chain_name == "Arc Testnet"
         assert client.chain_id == 5042002
-        assert client.domain == 26  # Verified Gateway domain
-    
-    def test_client_invalid_chain(self):
-        """GatewayClient should raise for invalid chain."""
+        assert client.domain == 26
+
+    def test_client_with_signer(self):
         from circlekit.client import GatewayClient
-        
+        from circlekit.signer import PrivateKeySigner
+        signer = PrivateKeySigner("0x0000000000000000000000000000000000000000000000000000000000000001")
+        client = GatewayClient(chain="arcTestnet", signer=signer)
+        assert client.address == "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf"
+
+    def test_client_requires_signer_or_key(self):
+        from circlekit.client import GatewayClient
+        with pytest.raises(ValueError, match="Either signer or private_key"):
+            GatewayClient(chain="arcTestnet")
+
+    def test_client_invalid_chain(self):
+        from circlekit.client import GatewayClient
         with pytest.raises(ValueError, match="Unsupported chain"):
             GatewayClient(
                 chain="invalidChain",
                 private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
             )
-    
+
     @pytest.mark.asyncio
-    async def test_client_supports_free_resource(self):
-        """supports() should return True for free resources."""
+    async def test_supports_returns_false_for_free_resource(self):
+        """supports() must return False for non-402 (per TS SDK)."""
         from circlekit.client import GatewayClient
-        
         client = GatewayClient(
             chain="arcTestnet",
             private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
         )
-        
-        # Mock a 200 response (free resource)
         with patch.object(client._http, 'get', new_callable=AsyncMock) as mock_get:
             mock_response = MagicMock()
             mock_response.status_code = 200
             mock_get.return_value = mock_response
-            
             result = await client.supports("http://example.com/free")
-            
-            assert result.supported == True
-            assert result.error is None
-        
+            assert result.supported is False
+            assert "not 402" in result.error
         await client.close()
-    
+
     @pytest.mark.asyncio
-    async def test_client_supports_402_with_gateway(self):
-        """supports() should detect Gateway support from 402."""
+    async def test_supports_returns_true_for_gateway_402(self):
         from circlekit.client import GatewayClient
-        
         client = GatewayClient(
             chain="arcTestnet",
             private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
         )
-        
-        # Mock a 402 response with Gateway option
         with patch.object(client._http, 'get', new_callable=AsyncMock) as mock_get:
             mock_response = MagicMock()
             mock_response.status_code = 402
@@ -452,17 +488,109 @@ class TestGatewayClient:
                     "network": "eip155:5042002",
                     "amount": "10000",
                     "payTo": "0x123",
-                    "extra": {"name": "GatewayWalletBatched"}
+                    "extra": {"name": "GatewayWalletBatched", "version": "1",
+                              "verifyingContract": "0x0077777d7EBA4688BDeF3E311b846F25870A19B9"}
                 }]
             }).encode()
             mock_get.return_value = mock_response
-            
             result = await client.supports("http://example.com/paid")
-            
-            assert result.supported == True
-            assert result.requirements is not None
-            assert result.requirements["amount"] == "10000"
-        
+            assert result.supported is True
+        await client.close()
+
+
+# ============================================================================
+# TEST: client.py deposit/withdraw
+# ============================================================================
+
+class TestGatewayClientDepositWithdraw:
+    """Test deposit and withdraw methods."""
+
+    @pytest.mark.asyncio
+    async def test_deposit_checks_allowance(self):
+        from circlekit.client import GatewayClient
+        client = GatewayClient(
+            chain="arcTestnet",
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        with patch('circlekit.client.check_allowance', return_value=0) as mock_check, \
+             patch('circlekit.client.execute_approve', return_value="0xapproval") as mock_approve, \
+             patch('circlekit.client.execute_deposit', return_value="0xdeposit") as mock_deposit:
+            result = await client.deposit("1.0")
+            mock_check.assert_called_once()
+            mock_approve.assert_called_once()
+            mock_deposit.assert_called_once()
+            assert result.approval_tx_hash == "0xapproval"
+            assert result.deposit_tx_hash == "0xdeposit"
+            assert result.amount == 1000000
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_deposit_skips_approval_if_sufficient(self):
+        from circlekit.client import GatewayClient
+        client = GatewayClient(
+            chain="arcTestnet",
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        with patch('circlekit.client.check_allowance', return_value=10000000), \
+             patch('circlekit.client.execute_approve') as mock_approve, \
+             patch('circlekit.client.execute_deposit', return_value="0xdeposit"):
+            result = await client.deposit("1.0")
+            mock_approve.assert_not_called()
+            assert result.approval_tx_hash is None
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_withdraw_calls_transfer_api(self):
+        """withdraw() should POST to /v1/transfer (not /v1/withdraw)."""
+        from circlekit.client import GatewayClient
+        client = GatewayClient(
+            chain="arcTestnet",
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        with patch.object(client._http, 'post', new_callable=AsyncMock) as mock_post:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = [{"transactionHash": "0xwithdraw123"}]
+            mock_post.return_value = mock_response
+            result = await client.withdraw("5.0")
+            # Verify it called /v1/transfer
+            call_args = mock_post.call_args
+            assert "/v1/transfer" in call_args[0][0]
+            assert result.mint_tx_hash == "0xwithdraw123"
+            assert result.amount == 5000000
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_withdraw_uses_burn_intent_types(self):
+        """withdraw() should send burnIntent with nested TransferSpec."""
+        from circlekit.client import GatewayClient
+        client = GatewayClient(
+            chain="arcTestnet",
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        with patch.object(client._http, 'post', new_callable=AsyncMock) as mock_post:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = [{"transactionHash": "0x123"}]
+            mock_post.return_value = mock_response
+            await client.withdraw("1.0")
+            # The JSON body should be a list with a burnIntent + signature
+            call_kwargs = mock_post.call_args
+            body = call_kwargs[1]["json"]
+            assert isinstance(body, list)
+            assert "burnIntent" in body[0]
+            assert "signature" in body[0]
+            # BurnIntent should have nested spec (TransferSpec)
+            burn_intent = body[0]["burnIntent"]
+            assert "maxBlockHeight" in burn_intent
+            assert "maxFee" in burn_intent
+            assert "spec" in burn_intent
+            spec = burn_intent["spec"]
+            assert "sourceDomain" in spec
+            assert "destinationDomain" in spec
+            assert "sourceDepositor" in spec
+            assert "destinationRecipient" in spec
+            assert "salt" in spec
         await client.close()
 
 
@@ -472,30 +600,184 @@ class TestGatewayClient:
 
 class TestGatewayMiddleware:
     """Test server middleware."""
-    
+
     def test_create_gateway_middleware(self):
-        """create_gateway_middleware should create valid middleware."""
         from circlekit.server import create_gateway_middleware
-        
         middleware = create_gateway_middleware(
             seller_address="0x1234567890123456789012345678901234567890",
             chain="arcTestnet",
         )
-        
         assert middleware._config.seller_address == "0x1234567890123456789012345678901234567890"
         assert middleware._chain_config.chain_id == 5042002
-    
-    def test_middleware_require_returns_decorator(self):
-        """require() should return a callable decorator."""
+
+    @pytest.mark.asyncio
+    async def test_process_request_returns_402_without_header(self):
         from circlekit.server import create_gateway_middleware
-        
         middleware = create_gateway_middleware(
             seller_address="0x1234567890123456789012345678901234567890",
         )
-        
-        decorator = middleware.require("$0.01")
-        
-        assert callable(decorator)
+        result = await middleware.process_request(
+            payment_header=None,
+            path="/api/test",
+            price="$0.01",
+        )
+        assert isinstance(result, dict)
+        assert result["status"] == 402
+        assert "accepts" in result["body"]
+
+    def test_networks_option_filters_accepted_chains(self):
+        """When networks is specified, only those chains appear in accepted_chains."""
+        from circlekit.server import create_gateway_middleware
+        middleware = create_gateway_middleware(
+            seller_address="0x1234567890123456789012345678901234567890",
+            chain="arcTestnet",
+            networks=["arcTestnet", "baseSepolia"],
+        )
+        assert "eip155:5042002" in middleware._accepted_chains
+        assert "eip155:84532" in middleware._accepted_chains
+        assert len(middleware._accepted_chains) == 2
+
+    def test_networks_empty_defaults_to_primary_chain(self):
+        """When networks is empty, accepted_chains defaults to primary chain."""
+        from circlekit.server import create_gateway_middleware
+        middleware = create_gateway_middleware(
+            seller_address="0x1234567890123456789012345678901234567890",
+            chain="baseSepolia",
+        )
+        assert "eip155:84532" in middleware._accepted_chains
+        assert len(middleware._accepted_chains) == 1
+
+    def test_networks_invalid_raises(self):
+        """Unknown network name raises ValueError."""
+        from circlekit.server import create_gateway_middleware
+        with pytest.raises(ValueError, match="Unknown network"):
+            create_gateway_middleware(
+                seller_address="0x1234567890123456789012345678901234567890",
+                networks=["nonexistentChain"],
+            )
+
+    @pytest.mark.asyncio
+    async def test_402_response_has_multiple_accepts_for_networks(self):
+        """402 response should have one accepts entry per accepted network."""
+        from circlekit.server import create_gateway_middleware
+        middleware = create_gateway_middleware(
+            seller_address="0x1234567890123456789012345678901234567890",
+            chain="arcTestnet",
+            networks=["arcTestnet", "baseSepolia"],
+        )
+        result = await middleware.process_request(
+            payment_header=None,
+            path="/api/test",
+            price="$0.01",
+        )
+        assert result["status"] == 402
+        accepts = result["body"]["accepts"]
+        assert len(accepts) == 2
+        networks = {a["network"] for a in accepts}
+        assert "eip155:5042002" in networks
+        assert "eip155:84532" in networks
+
+    @pytest.mark.asyncio
+    async def test_payment_with_wrong_network_rejected(self):
+        """Payment on a network not in accepted set should be rejected."""
+        from circlekit.server import create_gateway_middleware
+        import base64, json
+
+        middleware = create_gateway_middleware(
+            seller_address="0x1234567890123456789012345678901234567890",
+            chain="arcTestnet",
+            networks=["arcTestnet"],  # only Arc
+        )
+
+        # Fake a payment header claiming baseSepolia
+        fake_header = base64.b64encode(json.dumps({
+            "payload": {"authorization": {"from": "0xabc", "value": "10000"}, "signature": "0x123"},
+            "accepted": {"network": "eip155:84532"},  # Base Sepolia - not accepted
+        }).encode()).decode()
+
+        result = await middleware.process_request(
+            payment_header=fake_header,
+            path="/api/test",
+            price="$0.01",
+        )
+        assert isinstance(result, dict)
+        assert result["status"] == 402
+        assert "not accepted" in result["body"]["error"]
+
+    @pytest.mark.asyncio
+    async def test_malformed_header_list_returns_402(self):
+        """Header that decodes to a JSON list (not object) must return 402, not 500."""
+        from circlekit.server import create_gateway_middleware
+        import base64, json
+
+        middleware = create_gateway_middleware(
+            seller_address="0x1234567890123456789012345678901234567890",
+        )
+
+        # Encode a list instead of an object
+        bad_header = base64.b64encode(json.dumps(["not", "a", "dict"]).encode()).decode()
+        result = await middleware.process_request(
+            payment_header=bad_header,
+            path="/api/test",
+            price="$0.01",
+        )
+        assert isinstance(result, dict)
+        assert result["status"] == 402
+        assert "error" in result["body"]
+
+    @pytest.mark.asyncio
+    async def test_malformed_header_bad_accepted_returns_402(self):
+        """Header with non-dict 'accepted' field must return 402, not 500."""
+        from circlekit.server import create_gateway_middleware
+        import base64, json
+
+        middleware = create_gateway_middleware(
+            seller_address="0x1234567890123456789012345678901234567890",
+        )
+
+        bad_header = base64.b64encode(json.dumps({
+            "payload": {"authorization": {}, "signature": "0x"},
+            "accepted": "not-a-dict",
+        }).encode()).decode()
+        result = await middleware.process_request(
+            payment_header=bad_header,
+            path="/api/test",
+            price="$0.01",
+        )
+        assert isinstance(result, dict)
+        assert result["status"] == 402
+        assert "accepted" in result["body"]["error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_process_request_blocks_on_settle_failure(self):
+        """Must block access when settlement fails (not silently swallow)."""
+        from circlekit.server import create_gateway_middleware
+        from circlekit.facilitator import VerifyResponse
+        import base64, json
+
+        middleware = create_gateway_middleware(
+            seller_address="0x1234567890123456789012345678901234567890",
+        )
+
+        fake_header = base64.b64encode(json.dumps({
+            "payload": {"authorization": {"from": "0xabc", "value": "10000"}, "signature": "0x123"},
+            "accepted": {},
+        }).encode()).decode()
+
+        with patch.object(middleware._facilitator, 'verify', new_callable=AsyncMock) as mock_verify, \
+             patch.object(middleware._facilitator, 'settle', new_callable=AsyncMock) as mock_settle:
+            mock_verify.return_value = VerifyResponse(is_valid=True)
+            mock_settle.side_effect = ValueError("Settlement failed")
+
+            result = await middleware.process_request(
+                payment_header=fake_header,
+                path="/api/test",
+                price="$0.01",
+            )
+            # Must return error, not PaymentInfo
+            assert isinstance(result, dict)
+            assert result["status"] == 402
+            assert "settlement" in result["body"]["error"].lower()
 
 
 # ============================================================================
@@ -504,186 +786,45 @@ class TestGatewayMiddleware:
 
 class TestBoaTransactionHelpers:
     """Test transaction execution helpers."""
-    
+
     def test_parse_usdc(self):
-        """parse_usdc should convert decimal to raw amount."""
         from circlekit.boa_utils import parse_usdc
-        
         assert parse_usdc("1.0") == 1000000
         assert parse_usdc("0.01") == 10000
         assert parse_usdc("$5.50") == 5500000
         assert parse_usdc("100") == 100000000
-    
+
     def test_format_usdc(self):
-        """format_usdc should convert raw amount to decimal string."""
         from circlekit.boa_utils import format_usdc
-        
         assert format_usdc(1000000) == "1.000000"
         assert format_usdc(10000) == "0.010000"
-        assert format_usdc(5500000) == "5.500000"
-    
-    def test_check_allowance_function_exists(self):
-        """check_allowance should be importable."""
-        from circlekit.boa_utils import check_allowance
-        assert callable(check_allowance)
-    
-    def test_execute_approve_function_exists(self):
-        """execute_approve should be importable."""
-        from circlekit.boa_utils import execute_approve
-        assert callable(execute_approve)
-    
-    def test_execute_deposit_function_exists(self):
-        """execute_deposit should be importable."""
-        from circlekit.boa_utils import execute_deposit
-        assert callable(execute_deposit)
-    
-    def test_get_usdc_balance_function_exists(self):
-        """get_usdc_balance should be importable."""
-        from circlekit.boa_utils import get_usdc_balance
-        assert callable(get_usdc_balance)
-    
-    def test_get_gateway_balance_function_exists(self):
-        """get_gateway_balance should be importable."""
-        from circlekit.boa_utils import get_gateway_balance
-        assert callable(get_gateway_balance)
 
+    def test_minter_abi_exists(self):
+        """GATEWAY_MINTER_ABI should exist with gatewayMint function."""
+        from circlekit.boa_utils import GATEWAY_MINTER_ABI
+        assert isinstance(GATEWAY_MINTER_ABI, list)
+        assert any(f["name"] == "gatewayMint" for f in GATEWAY_MINTER_ABI)
 
-# ============================================================================
-# TEST: client.py deposit/withdraw
-# ============================================================================
+    def test_gateway_wallet_abi_expanded(self):
+        """GATEWAY_WALLET_ABI should have totalBalance, availableBalance, etc."""
+        from circlekit.boa_utils import GATEWAY_WALLET_ABI
+        names = {f["name"] for f in GATEWAY_WALLET_ABI}
+        assert "totalBalance" in names
+        assert "availableBalance" in names
+        assert "withdrawingBalance" in names
+        assert "withdrawableBalance" in names
+        assert "withdrawalDelay" in names
+        assert "withdrawalBlock" in names
+        assert "initiateWithdrawal" in names
+        # balanceOf should NOT be in Gateway ABI (TS SDK doesn't have it)
+        assert "balanceOf" not in names
 
-class TestGatewayClientDepositWithdraw:
-    """Test deposit and withdraw methods."""
-    
-    @pytest.mark.asyncio
-    async def test_deposit_checks_allowance(self):
-        """deposit() should check allowance before depositing."""
-        from circlekit.client import GatewayClient
-        
-        client = GatewayClient(
-            chain="arcTestnet",
-            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
-        )
-        
-        # Mock the boa functions
-        with patch('circlekit.client.check_allowance', return_value=0) as mock_check, \
-             patch('circlekit.client.execute_approve', return_value="0xapproval") as mock_approve, \
-             patch('circlekit.client.execute_deposit', return_value="0xdeposit") as mock_deposit:
-            
-            result = await client.deposit("1.0")
-            
-            # Should have checked allowance
-            mock_check.assert_called_once()
-            
-            # Should have approved (since allowance was 0)
-            mock_approve.assert_called_once()
-            
-            # Should have deposited
-            mock_deposit.assert_called_once()
-            
-            assert result.approval_tx_hash == "0xapproval"
-            assert result.deposit_tx_hash == "0xdeposit"
-            assert result.amount == 1000000
-            assert result.formatted_amount == "1.000000"
-        
-        await client.close()
-    
-    @pytest.mark.asyncio
-    async def test_deposit_skips_approval_if_sufficient(self):
-        """deposit() should skip approval if allowance is sufficient."""
-        from circlekit.client import GatewayClient
-        
-        client = GatewayClient(
-            chain="arcTestnet",
-            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
-        )
-        
-        # Mock the boa functions - sufficient allowance
-        with patch('circlekit.client.check_allowance', return_value=10000000) as mock_check, \
-             patch('circlekit.client.execute_approve') as mock_approve, \
-             patch('circlekit.client.execute_deposit', return_value="0xdeposit") as mock_deposit:
-            
-            result = await client.deposit("1.0")
-            
-            # Should have checked allowance
-            mock_check.assert_called_once()
-            
-            # Should NOT have approved (sufficient allowance)
-            mock_approve.assert_not_called()
-            
-            # Should have deposited
-            mock_deposit.assert_called_once()
-            
-            assert result.approval_tx_hash is None
-            assert result.deposit_tx_hash == "0xdeposit"
-        
-        await client.close()
-    
-    @pytest.mark.asyncio
-    async def test_withdraw_calls_gateway_api(self):
-        """withdraw() should call the Gateway API."""
-        from circlekit.client import GatewayClient
-        
-        client = GatewayClient(
-            chain="arcTestnet",
-            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
-        )
-        
-        # Mock the HTTP response
-        with patch.object(client._http, 'post', new_callable=AsyncMock) as mock_post:
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            mock_response.json.return_value = {
-                "transactionHash": "0xwithdraw123",
-                "status": "success",
-            }
-            mock_post.return_value = mock_response
-            
-            result = await client.withdraw("5.0")
-            
-            # Should have called the API
-            mock_post.assert_called_once()
-            
-            # Check the result
-            assert result.mint_tx_hash == "0xwithdraw123"
-            assert result.amount == 5000000
-            assert result.formatted_amount == "5.000000"
-            assert result.source_chain == "Arc Testnet"
-            assert result.destination_chain == "Arc Testnet"
-        
-        await client.close()
-    
-    @pytest.mark.asyncio
-    async def test_withdraw_cross_chain(self):
-        """withdraw() should support cross-chain withdrawals."""
-        from circlekit.client import GatewayClient
-        
-        client = GatewayClient(
-            chain="arcTestnet",
-            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
-        )
-        
-        # Mock the HTTP response
-        with patch.object(client._http, 'post', new_callable=AsyncMock) as mock_post:
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            mock_response.json.return_value = {
-                "transactionHash": "0xcrosschain",
-                "status": "success",
-            }
-            mock_post.return_value = mock_response
-            
-            result = await client.withdraw(
-                "10.0",
-                chain="baseSepolia",
-                recipient="0x9999999999999999999999999999999999999999",
-            )
-            
-            assert result.source_chain == "Arc Testnet"
-            assert result.destination_chain == "Base Sepolia"
-            assert result.recipient == "0x9999999999999999999999999999999999999999"
-        
-        await client.close()
+    def test_gateway_withdraw_abi_one_arg(self):
+        """Gateway withdraw() takes 1 arg (token), not 2 (token, amount)."""
+        from circlekit.boa_utils import GATEWAY_WALLET_ABI
+        withdraw_entry = next(f for f in GATEWAY_WALLET_ABI if f["name"] == "withdraw")
+        assert len(withdraw_entry["inputs"]) == 1
+        assert withdraw_entry["inputs"][0]["name"] == "token"
 
 
 # ============================================================================

@@ -244,11 +244,12 @@ class TestPaymentSignatures:
     def test_create_payment_signature_for_arc(self, private_key: str):
         """Should create a valid payment signature for Arc Testnet."""
         from circlekit.x402 import PaymentRequirements, create_payment_payload
-        from circlekit.boa_utils import get_account_from_private_key, get_chain_config
-        
-        address, account = get_account_from_private_key(private_key)
+        from circlekit.signer import PrivateKeySigner
+        from circlekit.boa_utils import get_chain_config
+
+        signer = PrivateKeySigner(private_key)
         config = get_chain_config("arcTestnet")
-        
+
         requirements = PaymentRequirements(
             scheme="exact",
             network=f"eip155:{config.chain_id}",
@@ -262,29 +263,25 @@ class TestPaymentSignatures:
                 "verifyingContract": config.gateway_address,
             },
         )
-        
+
         payload = create_payment_payload(
-            private_key=private_key,
-            payer_address=address,
+            signer=signer,
             requirements=requirements,
         )
-        
+
         print(f"\nPayment payload created:")
         print(f"  - From: {payload.authorization.get('from', 'N/A')}")
         print(f"  - To: {payload.authorization.get('to', 'N/A')}")
         print(f"  - Amount: {payload.authorization.get('value', 'N/A')}")
         print(f"  - Signature: {payload.signature[:20]}...")
-        
+
         # Verify the signature is valid format
         sig = payload.signature
-        # Signature may or may not have 0x prefix
-        if sig.startswith("0x"):
-            assert len(sig) == 132  # 0x + 130 hex chars
-        else:
-            assert len(sig) == 130  # 130 hex chars without prefix
-        
+        assert sig.startswith("0x"), f"Signature should start with 0x: {sig[:10]}"
+        assert len(sig) == 132, f"Signature should be 132 chars (0x + 130 hex): got {len(sig)}"
+
         # Verify authorization has correct from address
-        assert payload.authorization["from"].lower() == address.lower()
+        assert payload.authorization["from"].lower() == signer.address.lower()
     
     @pytest.mark.skipif(not HAS_PRIVATE_KEY, reason=SKIP_REASON)
     def test_payment_header_encoding(self, private_key: str):
@@ -294,11 +291,12 @@ class TestPaymentSignatures:
             create_payment_header,
             decode_payment_header,
         )
-        from circlekit.boa_utils import get_account_from_private_key, get_chain_config
-        
-        address, account = get_account_from_private_key(private_key)
+        from circlekit.signer import PrivateKeySigner
+        from circlekit.boa_utils import get_chain_config
+
+        signer = PrivateKeySigner(private_key)
         config = get_chain_config("arcTestnet")
-        
+
         requirements = PaymentRequirements(
             scheme="exact",
             network=f"eip155:{config.chain_id}",
@@ -312,23 +310,23 @@ class TestPaymentSignatures:
                 "verifyingContract": config.gateway_address,
             },
         )
-        
+
         header = create_payment_header(
-            private_key=private_key,
-            payer_address=address,
+            signer=signer,
             requirements=requirements,
         )
-        
+
         print(f"\nPayment header (base64): {header[:50]}...")
-        
+
         # Decode and verify
         decoded = decode_payment_header(header)
-        
+
         print(f"Decoded header fields: {list(decoded.keys())}")
-        
-        # The decoded header is the payment payload directly
-        assert "signature" in decoded
-        assert "authorization" in decoded
+
+        # The decoded header has {x402Version, payload: {authorization, signature}, resource, accepted}
+        assert "payload" in decoded
+        assert "signature" in decoded["payload"]
+        assert "authorization" in decoded["payload"]
         assert "accepted" in decoded
 
 

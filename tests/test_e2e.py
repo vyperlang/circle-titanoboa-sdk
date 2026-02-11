@@ -173,9 +173,10 @@ class TestPaymentSignatureFlow:
         
         # Step 3: Create payment header
         print("\nStep 3: Creating payment header...")
+        from circlekit.signer import PrivateKeySigner
+        signer = PrivateKeySigner(private_key)
         header = create_payment_header(
-            private_key=private_key,
-            payer_address=client.address,
+            signer=signer,
             requirements=requirements,
         )
         
@@ -209,66 +210,52 @@ class TestServerMiddlewareFlow:
     """Test the complete server middleware flow."""
     
     @pytest.mark.skipif(not HAS_PRIVATE_KEY, reason=SKIP_REASON_PK)
-    def test_flask_middleware_integration(self):
+    @pytest.mark.asyncio
+    async def test_middleware_process_request(self):
         """
-        Test Flask middleware:
-        1. Create app with payment requirement
-        2. Make request without payment
-        3. Verify 402 response
-        4. Create payment header
-        5. Make request with payment
+        Test middleware process_request:
+        1. Create middleware
+        2. Call process_request without payment -> 402
+        3. Verify 402 response format
         """
-        from flask import Flask
         from circlekit import create_gateway_middleware
-        
+
         print("\n" + "=" * 60)
-        print("E2E TEST: Flask Middleware Integration")
+        print("E2E TEST: Middleware process_request")
         print("=" * 60)
-        
-        # Step 1: Create Flask app with middleware
-        print("\nStep 1: Creating Flask app with payment middleware...")
-        
-        app = Flask(__name__)
+
         gateway = create_gateway_middleware(
             seller_address="0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
             chain="arcTestnet",
         )
-        
-        @app.route("/paid-content")
-        @gateway.require("$0.05")
-        def paid_content():
-            return {"content": "Premium content unlocked!"}
-        
-        print("  Created /paid-content endpoint requiring $0.05")
-        
-        # Step 2: Make request without payment
-        print("\nStep 2: Testing request without payment...")
-        
-        with app.test_client() as test_client:
-            response = test_client.get("/paid-content")
-        
-        print(f"  Status: {response.status_code}")
-        
-        assert response.status_code == 402, f"Expected 402, got {response.status_code}"
-        
-        # Step 3: Verify 402 response format
-        print("\nStep 3: Verifying 402 response format...")
-        
-        data = response.get_json()
-        
+
+        # Step 1: Call without payment header -> 402
+        print("\nStep 1: Testing request without payment...")
+
+        result = await gateway.process_request(
+            payment_header=None,
+            path="/paid-content",
+            price="$0.05",
+        )
+
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert result["status"] == 402
+
+        data = result["body"]
         assert "accepts" in data, "Missing 'accepts' in 402 response"
         assert "x402Version" in data, "Missing 'x402Version' in 402 response"
-        
+
         print(f"  x402Version: {data['x402Version']}")
         print(f"  Number of payment options: {len(data['accepts'])}")
-        
+
         if data["accepts"]:
             option = data["accepts"][0]
             print(f"  First option:")
             print(f"    - Scheme: {option.get('scheme')}")
             print(f"    - Network: {option.get('network')}")
             print(f"    - Amount: {int(option.get('amount', 0)) / 1e6} USDC")
-        
+
+        await gateway.close()
         print("\n✓ Middleware flow completed successfully!")
 
 
@@ -337,53 +324,17 @@ class TestCrossChainCompatibility:
 
 class TestProgrammableWalletsWithGateway:
     """Test using Programmable Wallets with Gateway operations."""
-    
+
     @pytest.mark.skipif(
         not HAS_CIRCLE_CREDS,
         reason=SKIP_REASON_CIRCLE
     )
-    def test_list_wallets_and_check_balances(self):
+    def test_list_wallets_placeholder(self):
         """
-        Test querying Gateway balances for Programmable Wallets:
-        1. List wallets from Circle
-        2. Query Gateway balance for each Arc Testnet wallet
+        Placeholder for Programmable Wallets integration.
+        AgentWalletManager was removed in the refactor.
         """
-        from circlekit import AgentWalletManager
-        from circlekit.boa_utils import get_chain_config, setup_boa_env, get_usdc_balance, format_usdc
-        
-        print("\n" + "=" * 60)
-        print("E2E TEST: Programmable Wallets + Gateway")
-        print("=" * 60)
-        
-        manager = AgentWalletManager()
-        
-        # Step 1: List wallets
-        print("\nStep 1: Listing Circle wallets...")
-        wallets = manager.list_wallets()
-        
-        print(f"  Found {len(wallets)} wallet(s)")
-        
-        # Filter for Arc Testnet wallets
-        arc_wallets = [w for w in wallets if "ARC" in w.blockchain.upper()]
-        
-        print(f"  Arc Testnet wallets: {len(arc_wallets)}")
-        
-        if not arc_wallets:
-            pytest.skip("No Arc Testnet wallets in Circle account")
-        
-        # Step 2: Check balances
-        print("\nStep 2: Checking balances for Arc wallets...")
-        
-        config = get_chain_config("arcTestnet")
-        setup_boa_env("arcTestnet")
-        
-        for wallet in arc_wallets[:3]:  # Check first 3
-            balance = get_usdc_balance("arcTestnet", wallet.address)
-            formatted = format_usdc(balance)
-            
-            print(f"  {wallet.name or 'Unnamed'} ({wallet.address[:10]}...): {formatted} USDC")
-        
-        print("\n✓ Programmable Wallets integration completed!")
+        pytest.skip("AgentWalletManager removed - Programmable Wallets not yet re-implemented")
 
 
 # =============================================================================
@@ -455,9 +406,10 @@ class TestFullBuyerJourney:
             },
         )
         
+        from circlekit.signer import PrivateKeySigner
+        signer = PrivateKeySigner(private_key)
         payload = create_payment_payload(
-            private_key=private_key,
-            payer_address=client.address,
+            signer=signer,
             requirements=requirements,
         )
         

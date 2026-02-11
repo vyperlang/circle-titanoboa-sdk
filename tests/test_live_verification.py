@@ -296,17 +296,14 @@ class TestEIP712Signatures:
     
     def test_payment_signature_is_recoverable(self):
         """Payment signatures should be recoverable to the correct address."""
-        from eth_account import Account
-        from eth_account.messages import encode_typed_data
-        
+        from circlekit.signer import PrivateKeySigner
+        from circlekit.x402 import create_payment_payload, PaymentRequirements
+
         # Test private key
         private_key = "0x0000000000000000000000000000000000000000000000000000000000000001"
-        account = Account.from_key(private_key)
-        expected_address = account.address
-        
-        # Create a test payment signature
-        from circlekit.x402 import create_payment_payload, PaymentRequirements
-        
+        signer = PrivateKeySigner(private_key)
+        expected_address = signer.address
+
         requirements = PaymentRequirements(
             scheme="exact",
             network="eip155:5042002",
@@ -320,24 +317,23 @@ class TestEIP712Signatures:
                 "verifyingContract": "0x0077777d7eba4688bdef3e311b846f25870a19b9",
             },
         )
-        
+
         payload = create_payment_payload(
-            private_key=private_key,
-            payer_address=expected_address,
+            signer=signer,
             requirements=requirements,
         )
-        
+
         # PaymentPayload is a dataclass with .signature and .authorization (dict)
         assert hasattr(payload, 'signature'), f"PaymentPayload missing signature attr: {type(payload)}"
         assert hasattr(payload, 'authorization'), f"PaymentPayload missing authorization attr"
-        
+
         sig = payload.signature
         assert sig.startswith("0x") or len(sig) == 130 or len(sig) == 132, \
             f"Invalid signature format: {sig[:20]}..."
-        
+
         print(f"Payment signature created: {sig[:20]}...")
         print(f"Payload authorization: {payload.authorization}")
-        
+
         # Verify the from address matches (authorization is a dict)
         from_addr = payload.authorization.get("from", "")
         assert from_addr.lower() == expected_address.lower(), \
