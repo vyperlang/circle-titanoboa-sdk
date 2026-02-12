@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Paywall Server Example - Flask adapter for circlekit's framework-agnostic middleware.
+Paywall Server Example - FastAPI adapter for circlekit's framework-agnostic middleware.
 
 Usage:
     export SELLER_ADDRESS=0x...
-    pip install flask
+    pip install fastapi uvicorn
     python paywall_server.py
 
 Endpoints:
@@ -14,11 +14,14 @@ Endpoints:
     POST /api/generate  - Content generation ($0.05)
 """
 
-import asyncio
 import os
 import sys
 from datetime import datetime
-from flask import Flask, request, jsonify
+from functools import wraps
+
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+import uvicorn
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -33,7 +36,7 @@ if not SELLER_ADDRESS:
     sys.exit(1)
 
 
-app = Flask(__name__)
+app = FastAPI()
 
 gateway = create_gateway_middleware(
     seller_address=SELLER_ADDRESS,
@@ -43,50 +46,57 @@ gateway = create_gateway_middleware(
 
 
 def require_payment(price):
-    """Flask adapter: wraps gateway.process_request into a decorator."""
+    """FastAPI adapter: wraps gateway.process_request into a decorator."""
     def decorator(func):
-        from functools import wraps
         @wraps(func)
-        def wrapper(*args, **kwargs):
-            result = asyncio.run(gateway.process_request(
+        async def wrapper(request: Request, *args, **kwargs):
+            result = await gateway.process_request(
                 payment_header=request.headers.get("Payment-Signature"),
-                path=request.path,
+                path=request.url.path,
                 price=price,
-            ))
+            )
             if isinstance(result, dict):
-                return jsonify(result["body"]), result["status"]
+                resp = JSONResponse(result["body"], status_code=result["status"])
+                for k, v in result.get("headers", {}).items():
+                    resp.headers[k] = v
+                return resp
             kwargs["payment"] = result
-            return func(*args, **kwargs)
+            response = await func(request, *args, **kwargs)
+            # Attach PAYMENT-RESPONSE header if present
+            if hasattr(result, 'response_headers') and result.response_headers:
+                for k, v in result.response_headers.items():
+                    response.headers[k] = v
+            return response
         return wrapper
     return decorator
 
 
-@app.route("/")
-def agent_info():
-    return jsonify({"success": True, "message": "Use x402 payments to access /api/analyze"})
+@app.get("/")
+async def agent_info():
+    return {"success": True, "message": "Use x402 payments to access /api/analyze"}
 
 
-@app.route("/health")
-def health_check():
-    return jsonify({"status": "ok", "seller": SELLER_ADDRESS, "sdk": "circlekit-py"})
+@app.get("/health")
+async def health_check():
+    return {"status": "ok", "seller": SELLER_ADDRESS, "sdk": "circlekit-py"}
 
 
-@app.route("/api/analyze")
+@app.get("/api/analyze")
 @require_payment("$0.01")
-def analyze(payment):
-    return jsonify({
+async def analyze(request: Request, payment: PaymentInfo = None):
+    return JSONResponse({
         "success": True,
         "result": {"summary": "Analysis complete.", "confidence": 0.92},
         "payment": {"amount": payment.amount, "payer": payment.payer, "transaction": payment.transaction},
     })
 
 
-@app.route("/api/generate", methods=["POST"])
+@app.post("/api/generate")
 @require_payment("$0.05")
-def generate(payment):
-    data = request.get_json() or {}
+async def generate(request: Request, payment: PaymentInfo = None):
+    data = await request.json()
     prompt = data.get("prompt", "default prompt")
-    return jsonify({
+    return JSONResponse({
         "success": True,
         "result": {"content": f"Generated content for: {prompt}", "generatedAt": datetime.now().isoformat()},
         "payment": {"amount": payment.amount, "payer": payment.payer, "transaction": payment.transaction},
@@ -95,4 +105,4 @@ def generate(payment):
 
 if __name__ == "__main__":
     print(f"Server: http://localhost:{PORT} | Seller: {SELLER_ADDRESS}")
-    app.run(host="0.0.0.0", port=PORT, debug=True)
+    uvicorn.run(app, host="0.0.0.0", port=PORT)
