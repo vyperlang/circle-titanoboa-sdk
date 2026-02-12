@@ -49,10 +49,12 @@ from circlekit.boa_utils import (
 )
 from circlekit.signer import Signer, PrivateKeySigner
 from circlekit.x402 import (
-    parse_402_response,
+    get_payment_required,
+    decode_payment_response,
     create_payment_header,
     PaymentRequirements,
     X402Response,
+    PAYMENT_SIGNATURE_HEADER,
 )
 
 
@@ -306,8 +308,9 @@ class GatewayClient:
                 status=response.status_code,
             )
 
-        # Step 2: Parse 402 response
-        x402_response = parse_402_response(response.content)
+        # Step 2: Parse 402 response (v2 header strict, v1 body fallback)
+        payment_required_header = response.headers.get("payment-required") or response.headers.get("PAYMENT-REQUIRED")
+        x402_response = get_payment_required(payment_required_header, response.content)
 
         # Find Gateway batching option
         gateway_option = x402_response.get_gateway_option()
@@ -326,7 +329,7 @@ class GatewayClient:
         )
 
         # Step 4: Retry request with payment header
-        headers["Payment-Signature"] = payment_header
+        headers[PAYMENT_SIGNATURE_HEADER] = payment_header
 
         if method == "GET":
             paid_response = await self._http.get(url, headers=headers)
@@ -340,9 +343,17 @@ class GatewayClient:
         else:
             data = paid_response.text
 
-        # Extract transaction from response if available
+        # Extract transaction from PAYMENT-RESPONSE header first, then body fallback.
+        # Best-effort: malformed header should not fail an otherwise successful payment.
         transaction = ""
-        if isinstance(data, dict):
+        payment_response_header = paid_response.headers.get("payment-response") or paid_response.headers.get("PAYMENT-RESPONSE")
+        if payment_response_header:
+            try:
+                receipt = decode_payment_response(payment_response_header)
+                transaction = receipt.get("transaction", "")
+            except Exception:
+                pass
+        if not transaction and isinstance(data, dict):
             payment_info = data.get("payment", {})
             transaction = payment_info.get("transaction", "")
 
@@ -666,8 +677,9 @@ class GatewayClient:
                     error="Resource does not require payment (not 402)",
                 )
 
-            # Parse 402 response
-            x402_response = parse_402_response(response.content)
+            # Parse 402 response (v2 header strict, v1 body fallback)
+            payment_required_header = response.headers.get("payment-required") or response.headers.get("PAYMENT-REQUIRED")
+            x402_response = get_payment_required(payment_required_header, response.content)
             gateway_option = x402_response.get_gateway_option()
 
             if gateway_option:

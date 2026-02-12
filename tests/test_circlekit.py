@@ -417,6 +417,354 @@ class TestX402:
 
 
 # ============================================================================
+# TEST: x402 header helpers
+# ============================================================================
+
+class TestX402Headers:
+    """Test x402 header encode/decode helpers."""
+
+    def test_encode_decode_payment_required_roundtrip(self):
+        from circlekit.x402 import encode_payment_required, decode_payment_required
+        body = {
+            "x402Version": 2,
+            "resource": {"url": "/api/test"},
+            "accepts": [{
+                "scheme": "exact",
+                "network": "eip155:5042002",
+                "asset": "0x3600000000000000000000000000000000000000",
+                "amount": "10000",
+                "payTo": "0x1234567890123456789012345678901234567890",
+                "maxTimeoutSeconds": 345600,
+                "extra": {
+                    "name": "GatewayWalletBatched",
+                    "version": "1",
+                    "verifyingContract": "0x0077777d7EBA4688BDeF3E311b846F25870A19B9",
+                }
+            }]
+        }
+        encoded = encode_payment_required(body)
+        decoded = decode_payment_required(encoded)
+        assert decoded.x402_version == 2
+        assert len(decoded.accepts) == 1
+        assert decoded.accepts[0].network == "eip155:5042002"
+        assert decoded.accepts[0].amount == "10000"
+
+    def test_decode_payment_required_from_header(self):
+        """Decode a manually constructed base64 header."""
+        import base64, json
+        from circlekit.x402 import decode_payment_required
+        data = {
+            "x402Version": 2,
+            "resource": {},
+            "accepts": [{"scheme": "exact", "network": "eip155:1", "amount": "5000", "payTo": "0xabc"}],
+        }
+        header = base64.b64encode(json.dumps(data).encode()).decode()
+        result = decode_payment_required(header)
+        assert result.x402_version == 2
+        assert result.accepts[0].amount == "5000"
+
+    def test_encode_decode_payment_response_roundtrip(self):
+        from circlekit.x402 import encode_payment_response, decode_payment_response
+        info = {"success": True, "transaction": "0xtx123", "payer": "0xabc", "network": "eip155:5042002"}
+        encoded = encode_payment_response(info)
+        decoded = decode_payment_response(encoded)
+        assert decoded["success"] is True
+        assert decoded["transaction"] == "0xtx123"
+        assert decoded["payer"] == "0xabc"
+
+    def test_get_payment_required_v2_header(self):
+        """get_payment_required decodes v2 header."""
+        from circlekit.x402 import get_payment_required, encode_payment_required
+        body = {
+            "x402Version": 2,
+            "resource": {},
+            "accepts": [{"scheme": "exact", "network": "eip155:1", "amount": "5000", "payTo": "0xabc"}],
+        }
+        header = encode_payment_required(body)
+        result = get_payment_required(header, None)
+        assert result.x402_version == 2
+        assert result.accepts[0].amount == "5000"
+
+    def test_get_payment_required_v1_body_fallback(self):
+        """get_payment_required accepts v1 body when no header."""
+        from circlekit.x402 import get_payment_required
+        body = {
+            "x402Version": 1,
+            "resource": {},
+            "accepts": [{"scheme": "exact", "network": "eip155:1", "amount": "3000", "payTo": "0xdef"}],
+        }
+        result = get_payment_required(None, body)
+        assert result.x402_version == 1
+        assert result.accepts[0].amount == "3000"
+
+    def test_get_payment_required_rejects_v2_body_without_header(self):
+        """get_payment_required raises on v2 body without PAYMENT-REQUIRED header."""
+        from circlekit.x402 import get_payment_required
+        body = {
+            "x402Version": 2,
+            "resource": {},
+            "accepts": [{"scheme": "exact", "network": "eip155:1", "amount": "5000", "payTo": "0xabc"}],
+        }
+        with pytest.raises(ValueError, match="Invalid payment required response"):
+            get_payment_required(None, body)
+
+    def test_get_payment_required_malformed_header_raises(self):
+        """get_payment_required raises on malformed header (does not fall back to body)."""
+        from circlekit.x402 import get_payment_required
+        body = {
+            "x402Version": 1,
+            "resource": {},
+            "accepts": [{"scheme": "exact", "network": "eip155:1", "amount": "5000", "payTo": "0xabc"}],
+        }
+        with pytest.raises(Exception):
+            get_payment_required("not-valid-base64!!!", body)
+
+    @pytest.mark.asyncio
+    async def test_client_pay_reads_header_first(self):
+        """Client reads PAYMENT-REQUIRED header when present, ignoring body."""
+        from circlekit.client import GatewayClient
+        from circlekit.x402 import encode_payment_required
+        import base64
+
+        client = GatewayClient(
+            chain="arcTestnet",
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+        )
+
+        header_data = {
+            "x402Version": 2,
+            "resource": {"url": "/api/test"},
+            "accepts": [{
+                "scheme": "exact",
+                "network": "eip155:5042002",
+                "asset": "0x3600000000000000000000000000000000000000",
+                "amount": "10000",
+                "payTo": "0x1234567890123456789012345678901234567890",
+                "maxTimeoutSeconds": 345600,
+                "extra": {
+                    "name": "GatewayWalletBatched",
+                    "version": "1",
+                    "verifyingContract": "0x0077777d7EBA4688BDeF3E311b846F25870A19B9",
+                }
+            }]
+        }
+        encoded_header = encode_payment_required(header_data)
+
+        with patch.object(client._http, 'get', new_callable=AsyncMock) as mock_get:
+            # 402 response with header but empty body
+            mock_402 = MagicMock()
+            mock_402.status_code = 402
+            mock_402.headers = {"payment-required": encoded_header}
+            mock_402.content = b"{}"  # empty/invalid body — header should be used
+
+            # Paid response
+            mock_paid = MagicMock()
+            mock_paid.status_code = 200
+            mock_paid.headers = {"content-type": "application/json"}
+            mock_paid.json.return_value = {"result": "ok"}
+
+            mock_get.side_effect = [mock_402, mock_paid]
+            result = await client.pay("http://example.com/paid")
+            assert result.status == 200
+            assert result.amount == 10000
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_client_pay_falls_back_to_v1_body(self):
+        """Client falls back to v1 body when PAYMENT-REQUIRED header is absent."""
+        from circlekit.client import GatewayClient
+
+        client = GatewayClient(
+            chain="arcTestnet",
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+        )
+
+        body_data = json.dumps({
+            "x402Version": 1,
+            "resource": {"url": "/api/test"},
+            "accepts": [{
+                "scheme": "exact",
+                "network": "eip155:5042002",
+                "asset": "0x3600000000000000000000000000000000000000",
+                "amount": "20000",
+                "payTo": "0x1234567890123456789012345678901234567890",
+                "maxTimeoutSeconds": 345600,
+                "extra": {
+                    "name": "GatewayWalletBatched",
+                    "version": "1",
+                    "verifyingContract": "0x0077777d7EBA4688BDeF3E311b846F25870A19B9",
+                }
+            }]
+        }).encode()
+
+        with patch.object(client._http, 'get', new_callable=AsyncMock) as mock_get:
+            # 402 response with no header, valid v1 body
+            mock_402 = MagicMock()
+            mock_402.status_code = 402
+            mock_402.headers = {}
+            mock_402.content = body_data
+
+            # Paid response
+            mock_paid = MagicMock()
+            mock_paid.status_code = 200
+            mock_paid.headers = {"content-type": "application/json"}
+            mock_paid.json.return_value = {"result": "ok"}
+
+            mock_get.side_effect = [mock_402, mock_paid]
+            result = await client.pay("http://example.com/paid")
+            assert result.status == 200
+            assert result.amount == 20000
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_client_pay_rejects_v2_body_without_header(self):
+        """Client rejects v2 body when PAYMENT-REQUIRED header is absent."""
+        from circlekit.client import GatewayClient
+
+        client = GatewayClient(
+            chain="arcTestnet",
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+        )
+
+        body_data = json.dumps({
+            "x402Version": 2,
+            "resource": {"url": "/api/test"},
+            "accepts": [{
+                "scheme": "exact",
+                "network": "eip155:5042002",
+                "asset": "0x3600000000000000000000000000000000000000",
+                "amount": "20000",
+                "payTo": "0x1234567890123456789012345678901234567890",
+                "maxTimeoutSeconds": 345600,
+                "extra": {
+                    "name": "GatewayWalletBatched",
+                    "version": "1",
+                    "verifyingContract": "0x0077777d7EBA4688BDeF3E311b846F25870A19B9",
+                }
+            }]
+        }).encode()
+
+        with patch.object(client._http, 'get', new_callable=AsyncMock) as mock_get:
+            mock_402 = MagicMock()
+            mock_402.status_code = 402
+            mock_402.headers = {}
+            mock_402.content = body_data
+            mock_get.return_value = mock_402
+
+            with pytest.raises(ValueError, match="Invalid payment required response"):
+                await client.pay("http://example.com/paid")
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_malformed_payment_response_header_falls_back_to_body(self):
+        """Malformed PAYMENT-RESPONSE header should not crash a successful payment."""
+        from circlekit.client import GatewayClient
+        from circlekit.x402 import encode_payment_required
+
+        client = GatewayClient(
+            chain="arcTestnet",
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+        )
+
+        header_data = {
+            "x402Version": 2,
+            "resource": {"url": "/api/test"},
+            "accepts": [{
+                "scheme": "exact",
+                "network": "eip155:5042002",
+                "asset": "0x3600000000000000000000000000000000000000",
+                "amount": "10000",
+                "payTo": "0x1234567890123456789012345678901234567890",
+                "maxTimeoutSeconds": 345600,
+                "extra": {
+                    "name": "GatewayWalletBatched",
+                    "version": "1",
+                    "verifyingContract": "0x0077777d7EBA4688BDeF3E311b846F25870A19B9",
+                }
+            }]
+        }
+        encoded_header = encode_payment_required(header_data)
+
+        with patch.object(client._http, 'get', new_callable=AsyncMock) as mock_get:
+            mock_402 = MagicMock()
+            mock_402.status_code = 402
+            mock_402.headers = {"payment-required": encoded_header}
+            mock_402.content = b"{}"
+
+            # Paid response with malformed PAYMENT-RESPONSE header but valid body
+            mock_paid = MagicMock()
+            mock_paid.status_code = 200
+            mock_paid.headers = {
+                "content-type": "application/json",
+                "payment-response": "not-valid-base64!!!",
+            }
+            mock_paid.json.return_value = {
+                "result": "ok",
+                "payment": {"transaction": "0xbody_tx"},
+            }
+
+            mock_get.side_effect = [mock_402, mock_paid]
+            result = await client.pay("http://example.com/paid")
+            assert result.status == 200
+            assert result.transaction == "0xbody_tx"
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_success_includes_payment_response_header(self):
+        """After valid payment, PaymentInfo includes PAYMENT-RESPONSE header."""
+        from circlekit.server import create_gateway_middleware
+        from circlekit.x402 import (
+            create_payment_header, PaymentRequirements, decode_payment_response,
+            PAYMENT_RESPONSE_HEADER,
+        )
+        from circlekit.signer import PrivateKeySigner
+        from circlekit.facilitator import VerifyResponse, SettleResponse
+
+        middleware = create_gateway_middleware(
+            seller_address="0x1234567890123456789012345678901234567890",
+            chain="arcTestnet",
+        )
+
+        signer = PrivateKeySigner(
+            "0x0000000000000000000000000000000000000000000000000000000000000001"
+        )
+        requirements = PaymentRequirements(
+            scheme="exact",
+            network="eip155:5042002",
+            asset="0x3600000000000000000000000000000000000000",
+            amount="10000",
+            pay_to="0x1234567890123456789012345678901234567890",
+            extra={
+                "name": "GatewayWalletBatched",
+                "version": "1",
+                "verifyingContract": "0x0077777d7EBA4688BDeF3E311b846F25870A19B9",
+            },
+        )
+        resource = {"url": "/api/test", "description": "test"}
+        header = create_payment_header(signer, requirements, resource=resource)
+
+        with patch.object(middleware._facilitator, 'verify', new_callable=AsyncMock) as mock_verify, \
+             patch.object(middleware._facilitator, 'settle', new_callable=AsyncMock) as mock_settle:
+            mock_verify.return_value = VerifyResponse(is_valid=True)
+            mock_settle.return_value = SettleResponse(success=True, transaction="0xtx456")
+
+            result = await middleware.process_request(
+                payment_header=header,
+                path="/api/test",
+                price="$0.01",
+            )
+
+        from circlekit.x402 import PaymentInfo
+        assert isinstance(result, PaymentInfo)
+        assert PAYMENT_RESPONSE_HEADER in result.response_headers
+        receipt = decode_payment_response(result.response_headers[PAYMENT_RESPONSE_HEADER])
+        assert receipt["success"] is True
+        assert receipt["transaction"] == "0xtx456"
+        assert receipt["payer"] == signer.address
+        assert receipt["network"] == "eip155:5042002"
+
+
+# ============================================================================
 # TEST: client.py
 # ============================================================================
 
@@ -474,24 +822,27 @@ class TestGatewayClient:
     @pytest.mark.asyncio
     async def test_supports_returns_true_for_gateway_402(self):
         from circlekit.client import GatewayClient
+        from circlekit.x402 import encode_payment_required
         client = GatewayClient(
             chain="arcTestnet",
             private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
         )
+        body = {
+            "x402Version": 2,
+            "accepts": [{
+                "scheme": "exact",
+                "network": "eip155:5042002",
+                "amount": "10000",
+                "payTo": "0x123",
+                "extra": {"name": "GatewayWalletBatched", "version": "1",
+                          "verifyingContract": "0x0077777d7EBA4688BDeF3E311b846F25870A19B9"}
+            }]
+        }
         with patch.object(client._http, 'get', new_callable=AsyncMock) as mock_get:
             mock_response = MagicMock()
             mock_response.status_code = 402
-            mock_response.content = json.dumps({
-                "x402Version": 2,
-                "accepts": [{
-                    "scheme": "exact",
-                    "network": "eip155:5042002",
-                    "amount": "10000",
-                    "payTo": "0x123",
-                    "extra": {"name": "GatewayWalletBatched", "version": "1",
-                              "verifyingContract": "0x0077777d7EBA4688BDeF3E311b846F25870A19B9"}
-                }]
-            }).encode()
+            mock_response.headers = {"payment-required": encode_payment_required(body)}
+            mock_response.content = json.dumps(body).encode()
             mock_get.return_value = mock_response
             result = await client.supports("http://example.com/paid")
             assert result.supported is True
@@ -613,6 +964,7 @@ class TestGatewayMiddleware:
     @pytest.mark.asyncio
     async def test_process_request_returns_402_without_header(self):
         from circlekit.server import create_gateway_middleware
+        from circlekit.x402 import decode_payment_required, PAYMENT_REQUIRED_HEADER
         middleware = create_gateway_middleware(
             seller_address="0x1234567890123456789012345678901234567890",
         )
@@ -624,6 +976,12 @@ class TestGatewayMiddleware:
         assert isinstance(result, dict)
         assert result["status"] == 402
         assert "accepts" in result["body"]
+        # Verify PAYMENT-REQUIRED header
+        assert "headers" in result
+        assert PAYMENT_REQUIRED_HEADER in result["headers"]
+        decoded = decode_payment_required(result["headers"][PAYMENT_REQUIRED_HEADER])
+        assert decoded.x402_version == result["body"]["x402Version"]
+        assert len(decoded.accepts) == len(result["body"]["accepts"])
 
     def test_networks_option_filters_accepted_chains(self):
         """When networks is specified, only those chains appear in accepted_chains."""
@@ -660,6 +1018,7 @@ class TestGatewayMiddleware:
     async def test_402_response_has_multiple_accepts_for_networks(self):
         """402 response should have one accepts entry per accepted network."""
         from circlekit.server import create_gateway_middleware
+        from circlekit.x402 import decode_payment_required, PAYMENT_REQUIRED_HEADER
         middleware = create_gateway_middleware(
             seller_address="0x1234567890123456789012345678901234567890",
             chain="arcTestnet",
@@ -676,6 +1035,10 @@ class TestGatewayMiddleware:
         networks = {a["network"] for a in accepts}
         assert "eip155:5042002" in networks
         assert "eip155:84532" in networks
+        # Verify PAYMENT-REQUIRED header matches body
+        assert PAYMENT_REQUIRED_HEADER in result["headers"]
+        decoded = decode_payment_required(result["headers"][PAYMENT_REQUIRED_HEADER])
+        assert len(decoded.accepts) == 2
 
     @pytest.mark.asyncio
     async def test_payment_with_wrong_network_rejected(self):

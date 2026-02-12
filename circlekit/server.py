@@ -2,24 +2,24 @@
 Server-side middleware for accepting Circle Gateway payments.
 
 Framework-agnostic — exposes a process_request() method that takes
-generic inputs and returns generic outputs. No Flask/FastAPI imports.
+generic inputs and returns generic outputs. No framework imports.
 
 Usage:
     gateway = create_gateway_middleware(seller_address='0x...', chain='arcTestnet')
 
     # In any framework:
     result = await gateway.process_request(
-        payment_header=request.headers.get("Payment-Signature"),
+        payment_header=request.headers.get("PAYMENT-SIGNATURE"),
         path="/api/analyze",
         price="$0.01",
     )
 
     if isinstance(result, dict):
-        # 402 response needed
-        return jsonify(result["body"]), result["status"]
+        # 402 — return body + result["headers"] (contains PAYMENT-REQUIRED)
+        ...
     else:
-        # PaymentInfo — request is paid
-        return jsonify({"data": "...", "paid_by": result.payer})
+        # PaymentInfo — return data + result.response_headers (contains PAYMENT-RESPONSE)
+        ...
 """
 
 from dataclasses import dataclass, field
@@ -34,7 +34,11 @@ from circlekit.boa_utils import parse_usdc
 from circlekit.facilitator import BatchFacilitatorClient
 from circlekit.x402 import (
     decode_payment_header,
+    encode_payment_required,
+    encode_payment_response,
     PaymentInfo,
+    PAYMENT_REQUIRED_HEADER,
+    PAYMENT_RESPONSE_HEADER,
 )
 
 
@@ -98,7 +102,12 @@ class GatewayMiddleware:
         amount = parse_usdc(price)
 
         if not payment_header:
-            return {"status": 402, "body": self._build_402_response(str(amount), path)}
+            body = self._build_402_response(str(amount), path)
+            return {
+                "status": 402,
+                "headers": {PAYMENT_REQUIRED_HEADER: encode_payment_required(body)},
+                "body": body,
+            }
 
         # Decode the payment header
         try:
@@ -182,12 +191,22 @@ class GatewayMiddleware:
         payer = authorization.get("from", "")
         value = str(authorization.get("value", amount))
 
+        response_headers = {
+            PAYMENT_RESPONSE_HEADER: encode_payment_response({
+                "success": True,
+                "transaction": settle_result.transaction or "",
+                "payer": payer,
+                "network": network,
+            })
+        }
+
         return PaymentInfo(
             verified=True,
             payer=payer,
             amount=value,
             network=network,
             transaction=settle_result.transaction,
+            response_headers=response_headers,
         )
 
     def _build_402_response(self, amount: str, path: str) -> Dict[str, Any]:

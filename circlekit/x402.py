@@ -29,6 +29,11 @@ from circlekit.constants import (
 from circlekit.boa_utils import generate_nonce
 from circlekit.signer import Signer
 
+# x402 v2 header names
+PAYMENT_REQUIRED_HEADER = "PAYMENT-REQUIRED"
+PAYMENT_SIGNATURE_HEADER = "PAYMENT-SIGNATURE"
+PAYMENT_RESPONSE_HEADER = "PAYMENT-RESPONSE"
+
 
 @dataclass
 class PaymentRequirements:
@@ -153,11 +158,52 @@ class PaymentInfo:
     amount: str
     network: str
     transaction: Optional[str] = None
+    response_headers: Dict[str, str] = field(default_factory=dict)
 
     @property
     def amount_formatted(self) -> str:
         """Format the amount as human-readable USDC."""
         return f"${int(self.amount) / 10**USDC_DECIMALS:.6f}"
+
+
+def _parse_x402_dict(data: Dict) -> X402Response:
+    """
+    Parse a dict into an X402Response.
+
+    Shared logic for both body-based and header-based parsing.
+
+    Args:
+        data: Parsed dict with x402Version and accepts fields
+
+    Returns:
+        X402Response with parsed payment requirements
+
+    Raises:
+        ValueError: If data is not valid x402 format
+    """
+    if "x402Version" not in data:
+        raise ValueError("Response missing x402Version field")
+    if "accepts" not in data:
+        raise ValueError("Response missing accepts field")
+
+    accepts = []
+    for opt in data["accepts"]:
+        requirements = PaymentRequirements(
+            scheme=opt.get("scheme", CIRCLE_BATCHING_SCHEME),
+            network=opt.get("network", ""),
+            asset=opt.get("asset", ""),
+            amount=str(opt.get("amount", "0")),
+            pay_to=opt.get("payTo", ""),
+            max_timeout_seconds=opt.get("maxTimeoutSeconds", 345600),
+            extra=opt.get("extra", {}),
+        )
+        accepts.append(requirements)
+
+    return X402Response(
+        x402_version=data["x402Version"],
+        resource=data.get("resource", {}),
+        accepts=accepts,
+    )
 
 
 def parse_402_response(response_body: Union[str, bytes, Dict]) -> X402Response:
@@ -180,31 +226,104 @@ def parse_402_response(response_body: Union[str, bytes, Dict]) -> X402Response:
     else:
         data = response_body
 
-    # Validate x402 structure
-    if "x402Version" not in data:
-        raise ValueError("Response missing x402Version field")
-    if "accepts" not in data:
-        raise ValueError("Response missing accepts field")
+    return _parse_x402_dict(data)
 
-    # Parse accepts array
-    accepts = []
-    for opt in data["accepts"]:
-        requirements = PaymentRequirements(
-            scheme=opt.get("scheme", CIRCLE_BATCHING_SCHEME),
-            network=opt.get("network", ""),
-            asset=opt.get("asset", ""),
-            amount=str(opt.get("amount", "0")),
-            pay_to=opt.get("payTo", ""),
-            max_timeout_seconds=opt.get("maxTimeoutSeconds", 345600),
-            extra=opt.get("extra", {}),
-        )
-        accepts.append(requirements)
 
-    return X402Response(
-        x402_version=data["x402Version"],
-        resource=data.get("resource", {}),
-        accepts=accepts,
-    )
+def get_payment_required(
+    header: Optional[str],
+    body: Union[str, bytes, Dict, None] = None,
+) -> X402Response:
+    """
+    Extract payment requirements from a 402 response.
+
+    Handles both v2 (header) and v1 (body) formats:
+    - If PAYMENT-REQUIRED header is present, decode it (strict — raises on malformed).
+    - If header is absent, parse body but only accept x402Version == 1.
+    - Otherwise raise ValueError.
+
+    Args:
+        header: Value of the PAYMENT-REQUIRED header, or None
+        body: Response body (for v1 compatibility)
+
+    Returns:
+        X402Response with parsed payment requirements
+
+    Raises:
+        ValueError: If no valid payment required info found
+    """
+    if header:
+        return decode_payment_required(header)
+
+    if body is not None:
+        if isinstance(body, bytes):
+            body = body.decode()
+        if isinstance(body, str):
+            data = json.loads(body)
+        else:
+            data = body
+
+        if isinstance(data, dict) and data.get("x402Version") == 1:
+            return _parse_x402_dict(data)
+
+    raise ValueError("Invalid payment required response: no PAYMENT-REQUIRED header and body is not a valid v1 x402 response")
+
+
+def encode_payment_required(data: Dict) -> str:
+    """
+    Encode payment requirements as a base64 string for the PAYMENT-REQUIRED header.
+
+    Args:
+        data: Payment requirements dict (x402Version, accepts, resource, etc.)
+
+    Returns:
+        Base64-encoded JSON string
+    """
+    return base64.b64encode(json.dumps(data).encode()).decode()
+
+
+def decode_payment_required(header: str) -> X402Response:
+    """
+    Decode a PAYMENT-REQUIRED header value into an X402Response.
+
+    Args:
+        header: Base64-encoded header value
+
+    Returns:
+        X402Response with parsed payment requirements
+
+    Raises:
+        ValueError: If header is not valid x402 format
+    """
+    decoded = base64.b64decode(header).decode()
+    data = json.loads(decoded)
+    return _parse_x402_dict(data)
+
+
+def encode_payment_response(settle_info: Dict) -> str:
+    """
+    Encode settlement info as a base64 string for the PAYMENT-RESPONSE header.
+
+    Args:
+        settle_info: Settlement info dict (success, transaction, payer, network)
+
+    Returns:
+        Base64-encoded JSON string
+    """
+    return base64.b64encode(json.dumps(settle_info).encode()).decode()
+
+
+def decode_payment_response(header: str) -> Dict:
+    """
+    Decode a PAYMENT-RESPONSE header value.
+
+    Args:
+        header: Base64-encoded header value
+
+    Returns:
+        Decoded settlement receipt dict
+    """
+    decoded = base64.b64decode(header).decode()
+    return json.loads(decoded)
 
 
 class BatchEvmScheme:

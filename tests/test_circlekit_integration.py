@@ -10,10 +10,13 @@ import base64
 from unittest.mock import patch, AsyncMock
 
 from circlekit.server import create_gateway_middleware
-from circlekit.x402 import create_payment_header, PaymentRequirements
+from circlekit.x402 import (
+    create_payment_header, PaymentRequirements, PaymentInfo,
+    decode_payment_required, decode_payment_response,
+    PAYMENT_REQUIRED_HEADER, PAYMENT_RESPONSE_HEADER,
+)
 from circlekit.signer import PrivateKeySigner
 from circlekit.facilitator import VerifyResponse, SettleResponse
-from circlekit.x402 import PaymentInfo
 
 
 class TestIntegration:
@@ -42,6 +45,12 @@ class TestIntegration:
         assert len(body["accepts"]) == 1
         assert body["accepts"][0]["scheme"] == "exact"
         assert body["accepts"][0]["extra"]["name"] == "GatewayWalletBatched"
+        # Verify PAYMENT-REQUIRED header
+        assert "headers" in result
+        assert PAYMENT_REQUIRED_HEADER in result["headers"]
+        decoded = decode_payment_required(result["headers"][PAYMENT_REQUIRED_HEADER])
+        assert decoded.x402_version == 2
+        assert len(decoded.accepts) == 1
         await gateway.close()
 
     @pytest.mark.asyncio
@@ -92,6 +101,12 @@ class TestIntegration:
         assert result.verified is True
         assert result.payer == signer.address
         assert result.transaction == "0xtx123"
+        # Verify PAYMENT-RESPONSE header
+        assert PAYMENT_RESPONSE_HEADER in result.response_headers
+        receipt = decode_payment_response(result.response_headers[PAYMENT_RESPONSE_HEADER])
+        assert receipt["success"] is True
+        assert receipt["transaction"] == "0xtx123"
+        assert receipt["payer"] == signer.address
         await gateway.close()
 
     @pytest.mark.asyncio

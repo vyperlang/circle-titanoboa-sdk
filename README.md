@@ -69,15 +69,23 @@ gateway = create_gateway_middleware(
 @app.get("/api/analyze")
 async def analyze(request: Request):
     result = await gateway.process_request(
-        payment_header=request.headers.get("Payment-Signature"),
+        payment_header=request.headers.get("PAYMENT-SIGNATURE"),
         path=request.url.path,
         price="$0.01",
     )
 
     if isinstance(result, dict):
-        return JSONResponse(result["body"], status_code=result["status"])
+        # 402: return body + PAYMENT-REQUIRED header
+        resp = JSONResponse(result["body"], status_code=result["status"])
+        for k, v in result.get("headers", {}).items():
+            resp.headers[k] = v
+        return resp
 
-    return {"data": "Premium content", "paid_by": result.payer}
+    # Success: return data + PAYMENT-RESPONSE header
+    resp = JSONResponse({"data": "Premium content", "paid_by": result.payer})
+    for k, v in result.response_headers.items():
+        resp.headers[k] = v
+    return resp
 ```
 
 ### Multi-chain Support
@@ -107,7 +115,7 @@ from circlekit.x402_integration import create_resource_server
 server = create_resource_server(is_testnet=True)
 server.initialize()
 
-# Use with FastAPI, Flask, or any x402 middleware
+# Use with FastAPI, Flask, or any framework
 ```
 
 Or use `BatchFacilitatorClient` directly with `x402ResourceServer`:
@@ -151,16 +159,22 @@ storage = boa.load("storage.vy")
 @app.get("/read")
 async def read_value(request: Request):
     result = await gateway.process_request(
-        payment_header=request.headers.get("Payment-Signature"),
+        payment_header=request.headers.get("PAYMENT-SIGNATURE"),
         path=request.url.path,
         price="$0.001",
     )
 
     if isinstance(result, dict):
-        return JSONResponse(result["body"], status_code=result["status"])
+        resp = JSONResponse(result["body"], status_code=result["status"])
+        for k, v in result.get("headers", {}).items():
+            resp.headers[k] = v
+        return resp
 
     value = storage.stored_value()
-    return {"value": value, "paid_by": result.payer}
+    resp = JSONResponse({"value": value, "paid_by": result.payer})
+    for k, v in result.response_headers.items():
+        resp.headers[k] = v
+    return resp
 ```
 
 ## API Reference
@@ -209,17 +223,23 @@ gateway = create_gateway_middleware(
 
 # Framework-agnostic — use process_request() in any handler:
 result = await gateway.process_request(
-    payment_header=request.headers.get("Payment-Signature"),
+    payment_header=request.headers.get("PAYMENT-SIGNATURE"),
     path=request.url.path,
     price="$0.01",
 )
 
 if isinstance(result, dict):
-    # 402 response needed
-    return JSONResponse(result["body"], status_code=result["status"])
+    # 402 response — set PAYMENT-REQUIRED header
+    resp = JSONResponse(result["body"], status_code=result["status"])
+    for k, v in result.get("headers", {}).items():
+        resp.headers[k] = v
+    return resp
 else:
-    # PaymentInfo — request is paid
-    print(result.payer, result.amount, result.transaction)
+    # PaymentInfo — set PAYMENT-RESPONSE header
+    resp = JSONResponse({"data": "..."})
+    for k, v in result.response_headers.items():
+        resp.headers[k] = v
+    return resp
 ```
 
 ### Low-Level x402 Functions
@@ -247,7 +267,7 @@ signer = PrivateKeySigner("0x...")
 header = create_payment_header(signer=signer, requirements=requirements)
 
 # Retry with payment
-response = httpx.get(url, headers={"Payment-Signature": header})
+response = httpx.get(url, headers={"PAYMENT-SIGNATURE": header})
 ```
 
 ### titanoboa Utilities

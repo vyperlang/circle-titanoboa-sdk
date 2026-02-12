@@ -245,6 +245,11 @@ class TestServerMiddlewareFlow:
         assert "accepts" in data, "Missing 'accepts' in 402 response"
         assert "x402Version" in data, "Missing 'x402Version' in 402 response"
 
+        # Verify PAYMENT-REQUIRED header
+        from circlekit.x402 import PAYMENT_REQUIRED_HEADER
+        assert "headers" in result, "Missing 'headers' in 402 response"
+        assert PAYMENT_REQUIRED_HEADER in result["headers"], "Missing PAYMENT-REQUIRED header"
+
         print(f"  x402Version: {data['x402Version']}")
         print(f"  Number of payment options: {len(data['accepts'])}")
 
