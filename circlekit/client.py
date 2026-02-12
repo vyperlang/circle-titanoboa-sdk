@@ -1,9 +1,6 @@
 """
 GatewayClient - Primary client for buyers to interact with Circle Gateway.
 
-This is the Python equivalent of the TypeScript GatewayClient from
-@circlefin/x402-batching/client.
-
 Usage:
     from circlekit import GatewayClient
     from circlekit.signer import PrivateKeySigner
@@ -367,7 +364,7 @@ class GatewayClient:
         """
         Withdraw USDC from Gateway to wallet.
 
-        Uses Circle Gateway's actual withdrawal flow (per client/index.mjs:912-1043):
+        Uses Circle Gateway's withdrawal flow:
         1. Create BurnIntent with nested TransferSpec (EIP-712 struct)
         2. Sign with domain {name: "GatewayWallet", version: "1"} (no chainId/verifyingContract)
         3. POST to /v1/transfer with [{burnIntent, signature}]
@@ -399,7 +396,7 @@ class GatewayClient:
         # Zero bytes32 for unused fields
         zero_bytes32 = "0x" + "00" * 32
 
-        # Build nested TransferSpec (per TS index.mjs:934-1043)
+        # Build nested TransferSpec
         transfer_spec = {
             "version": 0,
             "sourceDomain": self._config.gateway_domain,
@@ -650,8 +647,7 @@ class GatewayClient:
         """
         Check if a URL supports Gateway batching.
 
-        Per TS SDK (client/index.mjs:758-760): returns supported=False with
-        error "Resource does not require payment (not 402)" for non-402 responses.
+        Returns supported=False with error for non-402 responses.
 
         Args:
             url: URL to check

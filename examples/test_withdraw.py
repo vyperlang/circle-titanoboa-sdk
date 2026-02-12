@@ -10,7 +10,6 @@ Usage:
     export PRIVATE_KEY=0x...
     python test_withdraw.py
 
-Port of: basic-paywall/test-withdraw.ts
 """
 
 import asyncio

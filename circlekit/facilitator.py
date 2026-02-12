@@ -1,8 +1,6 @@
 """
 BatchFacilitatorClient - calls Circle's Gateway API for verify/settle/supported.
 
-Matches server/index.mjs:1-119 from @circlefin/x402-batching v1.0.1.
-
 Structurally compatible with x402's FacilitatorClient protocol (duck-typed).
 If the x402 package is installed, this client can be used directly with
 x402ResourceServer without any adapter.

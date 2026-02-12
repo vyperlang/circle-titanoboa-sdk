@@ -109,8 +109,7 @@ class PaymentPayload:
     """
     Signed payment payload to include in request header.
 
-    Matches TS client/index.mjs:809-815 structure:
-    {x402Version, payload: {authorization, signature}, resource, accepted}
+    Structure: {x402Version, payload: {authorization, signature}, resource, accepted}
     """
     x402_version: int
     signature: str
@@ -120,7 +119,7 @@ class PaymentPayload:
         """
         Encode as base64 for Payment-Signature header.
 
-        Format matches TS SDK: {x402Version, payload: {authorization, signature}, resource, accepted}
+        Format: {x402Version, payload: {authorization, signature}, resource, accepted}
         """
         header_data = {
             "x402Version": self.x402_version,
@@ -210,8 +209,6 @@ def parse_402_response(response_body: Union[str, bytes, Dict]) -> X402Response:
 
 class BatchEvmScheme:
     """
-    Matches client/index.mjs:44-131 BatchEvmScheme.
-
     Creates payment payloads using the GatewayWalletBatched EIP-712 domain.
     """
 
@@ -237,14 +234,12 @@ class BatchEvmScheme:
             PaymentPayload with signature, authorization, and x402Version
         """
         current_time = int(time.time())
-        # Per client/index.mjs:80-82
         valid_after = current_time - 600  # 10 min clock skew buffer
         valid_before = current_time + requirements.max_timeout_seconds
 
         nonce = generate_nonce()
 
-        # Authorization values are STRINGS in the JSON payload
-        # (per client/index.mjs:116-123), only BigInt for EIP-712 signing
+        # Authorization values are STRINGS in the JSON payload, only int for EIP-712 signing
         authorization = {
             "from": self._signer.address,
             "to": requirements.pay_to,
@@ -254,8 +249,7 @@ class BatchEvmScheme:
             "nonce": "0x" + nonce.hex(),
         }
 
-        # EIP-712 domain is GatewayWalletBatched (per client/index.mjs:858-864)
-        # NOT USDC domain
+        # EIP-712 domain is GatewayWalletBatched, NOT USDC domain
         domain = {
             "name": CIRCLE_BATCHING_NAME,
             "version": CIRCLE_BATCHING_VERSION,
@@ -274,7 +268,7 @@ class BatchEvmScheme:
             ]
         }
 
-        # For EIP-712 signing, use int values (per client/index.mjs:906-913)
+        # For EIP-712 signing, use int values
         signing_message = {
             "from": self._signer.address,
             "to": requirements.pay_to,
@@ -362,7 +356,7 @@ def is_batch_payment(requirements: Union[Dict, PaymentRequirements]) -> bool:
     """
     Check if payment requirements are for Gateway batching.
 
-    Checks both name AND version (per index.mjs:7-13).
+    Checks both name AND version.
 
     Args:
         requirements: Payment requirements (dict or PaymentRequirements)
@@ -384,7 +378,7 @@ def get_verifying_contract(requirements: Union[Dict, PaymentRequirements]) -> Op
     """
     Extract the GatewayWallet contract address from payment requirements.
 
-    Verifies that verifyingContract is a string (per index.mjs:19-23).
+    Verifies that verifyingContract is a string.
 
     Args:
         requirements: Payment requirements (dict or PaymentRequirements)

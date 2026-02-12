@@ -1,15 +1,12 @@
 """
 Constants for x402 batching via Circle Gateway.
-
-These match the TypeScript SDK's CHAIN_CONFIGS, GATEWAY_DOMAINS, etc.
-from @circlefin/x402-batching v1.0.1.
 """
 
 from dataclasses import dataclass
 from typing import Dict, Optional
 
 
-# Protocol constants (match TypeScript SDK)
+# Protocol constants
 CIRCLE_BATCHING_NAME = "GatewayWalletBatched"
 CIRCLE_BATCHING_VERSION = "1"
 CIRCLE_BATCHING_SCHEME = "exact"
@@ -42,7 +39,7 @@ class ChainConfig:
     is_testnet: bool = True
 
 
-# Chain configurations matching GATEWAY_DOMAINS from client/index.mjs:269-291
+# Chain configurations
 # gateway_domain values are Circle's internal domain IDs, NOT chain IDs
 CHAIN_CONFIGS: Dict[str, ChainConfig] = {
     # ============ TESTNETS ============
@@ -263,7 +260,7 @@ CHAIN_CONFIGS: Dict[str, ChainConfig] = {
 }
 
 
-# Chain name aliases (TS SDK uses 'sepolia' and 'mainnet')
+# Chain name aliases
 CHAIN_ALIASES: Dict[str, str] = {
     "sepolia": "ethereumSepolia",
     "mainnet": "ethereum",

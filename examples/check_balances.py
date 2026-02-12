@@ -8,7 +8,6 @@ Usage:
 
 This shows balances on Arc Testnet and Base Sepolia.
 
-Port of: basic-paywall/check-balances.ts
 """
 
 import asyncio

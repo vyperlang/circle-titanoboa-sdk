@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Agent Client Example - Python equivalent of examples/agent-marketplace/client.ts
+Agent Client Example
 
 This demonstrates how to pay for x402-protected resources using circlekit.
 
@@ -10,7 +10,7 @@ Usage:
 
 Prerequisites:
     1. Server running: SELLER_ADDRESS=0x... python paywall_server.py
-    2. USDC deposited in Gateway (use deposit.py or TypeScript deposit.ts)
+    2. USDC deposited in Gateway (use deposit.py)
 
 Get testnet USDC from: https://faucet.circle.com
 """
