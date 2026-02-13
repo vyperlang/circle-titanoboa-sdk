@@ -76,11 +76,22 @@ class BatchFacilitatorClient:
       - settle(payload, requirements) -> SettleResponse  (async)
       - get_supported() -> SupportedResponse             (sync)
       - aclose() / async context manager
+
+    Args:
+        url: Gateway API base URL (default: testnet)
+        create_auth_headers: Optional async callable that returns per-endpoint
+            auth headers. Should return a dict with optional keys ``verify``,
+            ``settle``, and ``supported``, each mapping to a dict of headers.
     """
 
-    def __init__(self, url: Optional[str] = None):
+    def __init__(
+        self,
+        url: Optional[str] = None,
+        create_auth_headers: Optional[Any] = None,
+    ):
         self._url = (url or GATEWAY_API_TESTNET_URL).rstrip("/")
         self._http = httpx.AsyncClient(timeout=30.0)
+        self._create_auth_headers = create_auth_headers
 
     async def verify(
         self,

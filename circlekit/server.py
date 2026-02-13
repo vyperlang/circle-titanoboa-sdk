@@ -31,7 +31,7 @@ from circlekit.constants import (
     get_gateway_api_url,
 )
 from circlekit.boa_utils import parse_usdc
-from circlekit.facilitator import BatchFacilitatorClient
+from circlekit.facilitator import BatchFacilitatorClient, VerifyResponse
 from circlekit.x402 import (
     decode_payment_header,
     encode_payment_required,
@@ -81,66 +81,35 @@ class GatewayMiddleware:
         else:
             self._accepted_chains[f"eip155:{self._chain_config.chain_id}"] = self._chain_config
 
-    async def process_request(
+    def _decode_and_resolve(
         self,
-        payment_header: Optional[str],
-        path: str,
+        payment_header: str,
         price: str,
-    ) -> Union[Dict[str, Any], PaymentInfo]:
-        """
-        Process a request that may require payment.
+    ) -> tuple:
+        """Decode a payment header and build server-side requirements.
 
-        Returns either:
-          - A dict {"status": 402, "body": {...}} if payment needed/failed
-          - A PaymentInfo on success
+        Returns:
+            (header_data, server_requirements, network) on success.
 
-        Args:
-            payment_header: Value of Payment-Signature header, or None
-            path: Request path (e.g., "/api/analyze")
-            price: Price in USD (e.g., "$0.01")
+        Raises:
+            ValueError: On malformed header or unsupported network.
         """
         amount = parse_usdc(price)
 
-        if not payment_header:
-            body = self._build_402_response(str(amount), path)
-            return {
-                "status": 402,
-                "headers": {PAYMENT_REQUIRED_HEADER: encode_payment_required(body)},
-                "body": body,
-            }
+        header_data = decode_payment_header(payment_header)
+        if not isinstance(header_data, dict):
+            raise ValueError("Payment header must decode to a JSON object")
 
-        # Decode the payment header
-        try:
-            header_data = decode_payment_header(payment_header)
-            if not isinstance(header_data, dict):
-                raise ValueError("Payment header must decode to a JSON object")
-        except Exception as e:
-            return {
-                "status": 402,
-                "body": {"error": f"Invalid payment header: {e}"},
-            }
-
-        # Extract the network from accepted requirements in the payment header
         accepted = header_data.get("accepted") or {}
         if not isinstance(accepted, dict):
-            return {
-                "status": 402,
-                "body": {"error": "Invalid payment header: 'accepted' must be an object"},
-            }
+            raise ValueError("Invalid payment header: 'accepted' must be an object")
         network = accepted.get("network", f"eip155:{self._chain_config.chain_id}")
 
-        # Validate network is in accepted set
         if network not in self._accepted_chains:
-            return {
-                "status": 402,
-                "body": {"error": f"Network {network} is not accepted by this server"},
-            }
+            raise ValueError(f"Network {network} is not accepted by this server")
 
-        # Use the matching chain config for server requirements
         matched_chain = self._accepted_chains[network]
 
-        # Reconstruct payment requirements from SERVER config (not client)
-        # so clients can't dictate their own price
         server_requirements = {
             "scheme": "exact",
             "network": network,
@@ -154,6 +123,129 @@ class GatewayMiddleware:
                 "verifyingContract": matched_chain.gateway_address,
             },
         }
+
+        return header_data, server_requirements, network
+
+    def require(self, price: str, path: str) -> Dict[str, Any]:
+        """
+        Build a 402 Payment Required response.
+
+        Args:
+            price: Price in USD (e.g., "$0.01")
+            path: Request path (e.g., "/api/analyze")
+
+        Returns:
+            Dict with status, headers, and body for a 402 response.
+        """
+        amount = parse_usdc(price)
+        body = self._build_402_response(str(amount), path)
+        return {
+            "status": 402,
+            "headers": {PAYMENT_REQUIRED_HEADER: encode_payment_required(body)},
+            "body": body,
+        }
+
+    async def verify(self, payment_header: str, price: str) -> VerifyResponse:
+        """
+        Verify a payment header against the Gateway API.
+
+        Args:
+            payment_header: Value of Payment-Signature header
+            price: Price in USD (e.g., "$0.01")
+
+        Returns:
+            VerifyResponse with is_valid flag
+
+        Raises:
+            ValueError: On malformed header or unsupported network.
+        """
+        header_data, server_requirements, _network = self._decode_and_resolve(
+            payment_header, price,
+        )
+        return await self._facilitator.verify(
+            payment_payload=header_data,
+            payment_requirements=server_requirements,
+        )
+
+    async def settle(self, payment_header: str, price: str) -> PaymentInfo:
+        """
+        Settle a verified payment via the Gateway API.
+
+        Args:
+            payment_header: Value of Payment-Signature header
+            price: Price in USD (e.g., "$0.01")
+
+        Returns:
+            PaymentInfo with transaction hash and response headers.
+
+        Raises:
+            ValueError: On malformed header, unsupported network, or settlement failure.
+        """
+        header_data, server_requirements, network = self._decode_and_resolve(
+            payment_header, price,
+        )
+        amount = parse_usdc(price)
+
+        settle_result = await self._facilitator.settle(
+            payment_payload=header_data,
+            payment_requirements=server_requirements,
+        )
+
+        payload = header_data.get("payload", header_data)
+        authorization = payload.get("authorization", {})
+        payer = authorization.get("from", "")
+        value = str(authorization.get("value", amount))
+
+        response_headers = {
+            PAYMENT_RESPONSE_HEADER: encode_payment_response({
+                "success": True,
+                "transaction": settle_result.transaction or "",
+                "payer": payer,
+                "network": network,
+            })
+        }
+
+        return PaymentInfo(
+            verified=True,
+            payer=payer,
+            amount=value,
+            network=network,
+            transaction=settle_result.transaction,
+            response_headers=response_headers,
+        )
+
+    async def process_request(
+        self,
+        payment_header: Optional[str],
+        path: str,
+        price: str,
+    ) -> Union[Dict[str, Any], PaymentInfo]:
+        """
+        Process a request that may require payment.
+
+        Convenience method that combines require(), verify(), and settle().
+
+        Returns either:
+          - A dict {"status": 402, "body": {...}} if payment needed/failed
+          - A PaymentInfo on success
+
+        Args:
+            payment_header: Value of Payment-Signature header, or None
+            path: Request path (e.g., "/api/analyze")
+            price: Price in USD (e.g., "$0.01")
+        """
+        if not payment_header:
+            return self.require(price, path)
+
+        try:
+            header_data, server_requirements, network = self._decode_and_resolve(
+                payment_header, price,
+            )
+        except (ValueError, Exception) as e:
+            return {
+                "status": 402,
+                "body": {"error": f"Invalid payment header: {e}"},
+            }
 
         # Verify via Gateway API
         try:
@@ -185,7 +277,7 @@ class GatewayMiddleware:
                 "body": {"error": f"Payment settlement failed: {e}"},
             }
 
-        # Extract payer from the payload
+        amount = parse_usdc(price)
         payload = header_data.get("payload", header_data)
         authorization = payload.get("authorization", {})
         payer = authorization.get("from", "")
