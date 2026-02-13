@@ -8,6 +8,7 @@ Key components:
 - GatewayClient: Buyer-side client for deposits, payments, withdrawals
 - create_gateway_middleware: Server-side payment middleware (framework-agnostic)
 - Signer/PrivateKeySigner: EIP-712 signing protocol
+- TxExecutor/BoaTxExecutor: Onchain transaction execution protocol
 - BatchEvmScheme: Payment payload creation
 - BatchFacilitatorClient: Gateway API verify/settle
 - x402: Protocol helpers for parsing 402 responses and payment signatures
@@ -15,13 +16,17 @@ Key components:
 
 Example usage:
     from circlekit import GatewayClient
-    from circlekit.signer import PrivateKeySigner
 
-    signer = PrivateKeySigner('0x...')
-    client = GatewayClient(chain='arcTestnet', signer=signer)
-
-    # Or with legacy private_key (creates PrivateKeySigner internally):
+    # Full local wallet (creates PrivateKeySigner + BoaTxExecutor):
     client = GatewayClient(chain='arcTestnet', private_key='0x...')
+
+    # Pay-only (signer is enough for gasless payments):
+    from circlekit.signer import PrivateKeySigner
+    client = GatewayClient(chain='arcTestnet', signer=PrivateKeySigner('0x...'))
+
+    # Advanced (inject capabilities separately):
+    from circlekit.tx_executor import BoaTxExecutor
+    client = GatewayClient(chain='arcTestnet', signer=my_signer, tx_executor=BoaTxExecutor('0x...'))
 
     # Pay for a resource (gasless!)
     result = await client.pay('http://api.example.com/paid-endpoint')
@@ -34,6 +39,7 @@ __author__ = "circlekit contributors"
 from circlekit.client import GatewayClient
 from circlekit.server import create_gateway_middleware
 from circlekit.signer import Signer, PrivateKeySigner
+from circlekit.tx_executor import TxExecutor, BoaTxExecutor
 from circlekit.facilitator import BatchFacilitatorClient
 from circlekit.x402 import (
     parse_402_response,
@@ -67,6 +73,9 @@ __all__ = [
     # Signer
     "Signer",
     "PrivateKeySigner",
+    # TxExecutor
+    "TxExecutor",
+    "BoaTxExecutor",
     # Facilitator
     "BatchFacilitatorClient",
     # x402 protocol

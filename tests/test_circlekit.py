@@ -859,13 +859,14 @@ class TestGatewayClientDepositWithdraw:
     @pytest.mark.asyncio
     async def test_deposit_checks_allowance(self):
         from circlekit.client import GatewayClient
+        from circlekit.tx_executor import TxExecutor
         client = GatewayClient(
             chain="arcTestnet",
             private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
         )
-        with patch('circlekit.client.check_allowance', return_value=0) as mock_check, \
-             patch('circlekit.client.execute_approve', return_value="0xapproval") as mock_approve, \
-             patch('circlekit.client.execute_deposit', return_value="0xdeposit") as mock_deposit:
+        with patch.object(client._tx_executor, 'check_allowance', return_value=0) as mock_check, \
+             patch.object(client._tx_executor, 'execute_approve', return_value="0xapproval") as mock_approve, \
+             patch.object(client._tx_executor, 'execute_deposit', return_value="0xdeposit") as mock_deposit:
             result = await client.deposit("1.0")
             mock_check.assert_called_once()
             mock_approve.assert_called_once()
@@ -882,9 +883,9 @@ class TestGatewayClientDepositWithdraw:
             chain="arcTestnet",
             private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
         )
-        with patch('circlekit.client.check_allowance', return_value=10000000), \
-             patch('circlekit.client.execute_approve') as mock_approve, \
-             patch('circlekit.client.execute_deposit', return_value="0xdeposit"):
+        with patch.object(client._tx_executor, 'check_allowance', return_value=10000000), \
+             patch.object(client._tx_executor, 'execute_approve') as mock_approve, \
+             patch.object(client._tx_executor, 'execute_deposit', return_value="0xdeposit"):
             result = await client.deposit("1.0")
             mock_approve.assert_not_called()
             assert result.approval_tx_hash is None
@@ -892,22 +893,30 @@ class TestGatewayClientDepositWithdraw:
 
     @pytest.mark.asyncio
     async def test_withdraw_calls_transfer_api(self):
-        """withdraw() should POST to /v1/transfer (not /v1/withdraw)."""
+        """withdraw() should POST to /v1/transfer and call gatewayMint."""
         from circlekit.client import GatewayClient
         client = GatewayClient(
             chain="arcTestnet",
             private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
         )
-        with patch.object(client._http, 'post', new_callable=AsyncMock) as mock_post:
+        with patch.object(client._http, 'post', new_callable=AsyncMock) as mock_post, \
+             patch.object(client._tx_executor, 'execute_gateway_mint', return_value="0xmint_tx") as mock_mint:
             mock_response = MagicMock()
             mock_response.status_code = 200
-            mock_response.json.return_value = [{"transactionHash": "0xwithdraw123"}]
+            mock_response.json.return_value = [{
+                "attestation": "0xaabb",
+                "signature": "0xccdd",
+                "transferId": "transfer-123",
+            }]
             mock_post.return_value = mock_response
             result = await client.withdraw("5.0")
             # Verify it called /v1/transfer
             call_args = mock_post.call_args
             assert "/v1/transfer" in call_args[0][0]
-            assert result.mint_tx_hash == "0xwithdraw123"
+            # Verify gatewayMint was called on the destination chain
+            mock_mint.assert_called_once()
+            assert result.mint_tx_hash == "0xmint_tx"
+            assert result.transfer_id == "transfer-123"
             assert result.amount == 5000000
         await client.close()
 
@@ -919,10 +928,11 @@ class TestGatewayClientDepositWithdraw:
             chain="arcTestnet",
             private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
         )
-        with patch.object(client._http, 'post', new_callable=AsyncMock) as mock_post:
+        with patch.object(client._http, 'post', new_callable=AsyncMock) as mock_post, \
+             patch.object(client._tx_executor, 'execute_gateway_mint', return_value="0xmint"):
             mock_response = MagicMock()
             mock_response.status_code = 200
-            mock_response.json.return_value = [{"transactionHash": "0x123"}]
+            mock_response.json.return_value = [{"attestation": "0x01", "signature": "0x02", "transferId": "t1"}]
             mock_post.return_value = mock_response
             await client.withdraw("1.0")
             # The JSON body should be a list with a burnIntent + signature
@@ -943,6 +953,141 @@ class TestGatewayClientDepositWithdraw:
             assert "destinationRecipient" in spec
             assert "salt" in spec
         await client.close()
+
+    @pytest.mark.asyncio
+    async def test_deposit_raises_without_tx_executor(self):
+        """deposit() raises if only signer is provided (no tx_executor)."""
+        from circlekit.client import GatewayClient
+        from circlekit.signer import PrivateKeySigner
+        signer = PrivateKeySigner("0x0000000000000000000000000000000000000000000000000000000000000001")
+        client = GatewayClient(chain="arcTestnet", signer=signer)
+        with pytest.raises(ValueError, match="tx_executor or private_key"):
+            await client.deposit("1.0")
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_withdraw_raises_without_tx_executor(self):
+        """withdraw() raises if only signer is provided (no tx_executor)."""
+        from circlekit.client import GatewayClient
+        from circlekit.signer import PrivateKeySigner
+        signer = PrivateKeySigner("0x0000000000000000000000000000000000000000000000000000000000000001")
+        client = GatewayClient(chain="arcTestnet", signer=signer)
+        with pytest.raises(ValueError, match="tx_executor or private_key"):
+            await client.withdraw("1.0")
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_pay_works_without_tx_executor(self):
+        """pay() works with signer-only client (no tx_executor needed)."""
+        from circlekit.client import GatewayClient
+        from circlekit.signer import PrivateKeySigner
+        from circlekit.x402 import encode_payment_required
+
+        signer = PrivateKeySigner("0x0000000000000000000000000000000000000000000000000000000000000001")
+        client = GatewayClient(chain="arcTestnet", signer=signer)
+
+        header_data = {
+            "x402Version": 2,
+            "resource": {"url": "/api/test"},
+            "accepts": [{
+                "scheme": "exact",
+                "network": "eip155:5042002",
+                "asset": "0x3600000000000000000000000000000000000000",
+                "amount": "10000",
+                "payTo": "0x1234567890123456789012345678901234567890",
+                "maxTimeoutSeconds": 345600,
+                "extra": {
+                    "name": "GatewayWalletBatched",
+                    "version": "1",
+                    "verifyingContract": "0x0077777d7EBA4688BDeF3E311b846F25870A19B9",
+                }
+            }]
+        }
+        encoded_header = encode_payment_required(header_data)
+
+        with patch.object(client._http, 'get', new_callable=AsyncMock) as mock_get:
+            mock_402 = MagicMock()
+            mock_402.status_code = 402
+            mock_402.headers = {"payment-required": encoded_header}
+            mock_402.content = b"{}"
+
+            mock_paid = MagicMock()
+            mock_paid.status_code = 200
+            mock_paid.headers = {"content-type": "application/json"}
+            mock_paid.json.return_value = {"result": "ok"}
+
+            mock_get.side_effect = [mock_402, mock_paid]
+            result = await client.pay("http://example.com/paid")
+            assert result.status == 200
+            assert result.amount == 10000
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_withdraw_raises_on_missing_attestation(self):
+        """withdraw() raises if API response is missing attestation/signature."""
+        from circlekit.client import GatewayClient
+        client = GatewayClient(
+            chain="arcTestnet",
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        with patch.object(client._http, 'post', new_callable=AsyncMock) as mock_post:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = [{"transferId": "t1"}]  # no attestation/signature
+            mock_post.return_value = mock_response
+            with pytest.raises(ValueError, match="missing attestation or signature"):
+                await client.withdraw("1.0")
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_withdraw_does_not_pass_source_rpc_to_mint(self):
+        """Cross-chain withdraw must not pass source-chain rpc_url to gatewayMint."""
+        from circlekit.client import GatewayClient
+        client = GatewayClient(
+            chain="arcTestnet",
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+            rpc_url="http://custom-source-rpc.example.com",
+        )
+        with patch.object(client._http, 'post', new_callable=AsyncMock) as mock_post, \
+             patch.object(client._tx_executor, 'execute_gateway_mint', return_value="0xmint") as mock_mint:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = [{
+                "attestation": "0xaa",
+                "signature": "0xbb",
+                "transferId": "t1",
+            }]
+            mock_post.return_value = mock_response
+            await client.withdraw("1.0", chain="baseSepolia")
+            # rpc_url passed to gatewayMint must be None, not the source-chain override
+            _, kwargs = mock_mint.call_args
+            # It's passed positionally, so check args
+            call_args = mock_mint.call_args[0]
+            assert call_args[-1] is None, f"Expected None rpc_url for dest chain, got {call_args[-1]}"
+        await client.close()
+
+    def test_constructor_rejects_mismatched_signer_and_private_key(self):
+        """Constructor raises if signer address != private_key address."""
+        from circlekit.client import GatewayClient
+        from circlekit.signer import PrivateKeySigner
+        # Key 1 -> address 0x7E5F...
+        # Key 2 -> different address
+        signer = PrivateKeySigner("0x0000000000000000000000000000000000000000000000000000000000000002")
+        with pytest.raises(ValueError, match="does not match"):
+            GatewayClient(
+                chain="arcTestnet",
+                signer=signer,
+                private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+            )
+
+    def test_constructor_allows_matching_signer_and_private_key(self):
+        """Constructor allows signer + private_key when addresses match."""
+        from circlekit.client import GatewayClient
+        from circlekit.signer import PrivateKeySigner
+        key = "0x0000000000000000000000000000000000000000000000000000000000000001"
+        signer = PrivateKeySigner(key)
+        client = GatewayClient(chain="arcTestnet", signer=signer, private_key=key)
+        assert client.address == signer.address
 
 
 # ============================================================================
@@ -1181,6 +1326,12 @@ class TestBoaTransactionHelpers:
         assert "initiateWithdrawal" in names
         # balanceOf should NOT be in Gateway ABI (TS SDK doesn't have it)
         assert "balanceOf" not in names
+
+    def test_boa_tx_executor_satisfies_protocol(self):
+        """BoaTxExecutor must satisfy the TxExecutor protocol."""
+        from circlekit.tx_executor import TxExecutor, BoaTxExecutor
+        executor = BoaTxExecutor("0x0000000000000000000000000000000000000000000000000000000000000001")
+        assert isinstance(executor, TxExecutor)
 
     def test_gateway_withdraw_abi_one_arg(self):
         """Gateway withdraw() takes 1 arg (token), not 2 (token, amount)."""

@@ -448,6 +448,42 @@ def execute_deposit(
         return str(tx) if tx else ""
 
 
+def execute_gateway_mint(
+    chain: str,
+    private_key: str,
+    attestation: bytes,
+    signature: bytes,
+    rpc_url: Optional[str] = None,
+) -> str:
+    """
+    Call gatewayMint on the destination chain's minter contract.
+
+    Args:
+        chain: Chain name
+        private_key: Hex-encoded private key
+        attestation: Attestation payload bytes
+        signature: Signature bytes
+        rpc_url: Optional custom RPC URL
+
+    Returns:
+        Transaction hash
+    """
+    config = get_chain_config(chain)
+    address, env = setup_boa_with_account(chain, private_key, rpc_url)
+
+    factory = boa.loads_abi(json.dumps(GATEWAY_MINTER_ABI))
+    minter = factory.at(config.gateway_minter)
+
+    tx = minter.gatewayMint(attestation, signature)
+
+    try:
+        if hasattr(boa.env, 'last_tx') and boa.env.last_tx:
+            return boa.env.last_tx.hex() if hasattr(boa.env.last_tx, 'hex') else str(boa.env.last_tx)
+        return str(tx) if tx else ""
+    except Exception:
+        return str(tx) if tx else ""
+
+
 def check_allowance(
     chain: str,
     owner: str,

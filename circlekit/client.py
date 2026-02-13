@@ -3,22 +3,23 @@ GatewayClient - Primary client for buyers to interact with Circle Gateway.
 
 Usage:
     from circlekit import GatewayClient
-    from circlekit.signer import PrivateKeySigner
 
-    signer = PrivateKeySigner('0x...')
-    client = GatewayClient(
-        chain='arcTestnet',
-        signer=signer,
-    )
+    # Full local wallet (private_key creates both signer + tx_executor):
+    client = GatewayClient(chain='arcTestnet', private_key='0x...')
 
-    # Deposit USDC into Gateway (one-time setup)
+    # Deposit USDC into Gateway (one-time setup, requires tx_executor)
     await client.deposit('1.0')
 
-    # Pay for a resource (gasless!)
+    # Pay for a resource (gasless, requires signer only!)
     result = await client.pay('http://api.example.com/paid')
 
-    # Check balances
-    balances = await client.get_balances()
+    # Withdraw from Gateway (requires signer + tx_executor)
+    result = await client.withdraw('5.0')
+
+    # Pay-only usage (signer is enough):
+    from circlekit.signer import PrivateKeySigner
+    client = GatewayClient(chain='arcTestnet', signer=PrivateKeySigner('0x...'))
+    result = await client.pay('http://api.example.com/paid')
 """
 
 import asyncio
@@ -41,13 +42,11 @@ from circlekit.boa_utils import (
     get_account_from_private_key,
     format_usdc,
     parse_usdc,
-    execute_approve,
-    execute_deposit,
-    check_allowance,
     get_usdc_balance,
     get_gateway_balance,
 )
 from circlekit.signer import Signer, PrivateKeySigner
+from circlekit.tx_executor import TxExecutor, BoaTxExecutor
 from circlekit.x402 import (
     get_payment_required,
     decode_payment_response,
@@ -84,6 +83,7 @@ class PayResult(Generic[T]):
 class WithdrawResult:
     """Result of a withdraw operation."""
     mint_tx_hash: str
+    transfer_id: str
     amount: int
     formatted_amount: str
     source_chain: str
@@ -131,35 +131,42 @@ class GatewayClient:
     Primary client for buyers to interact with Circle Gateway.
 
     Handles:
-    - Deposits: Move USDC from wallet into Gateway
-    - Payments: Pay for x402-protected resources (gasless)
-    - Withdrawals: Move USDC from Gateway back to wallet (via BurnIntent)
+    - Deposits: Move USDC from wallet into Gateway (requires tx_executor or private_key)
+    - Payments: Pay for x402-protected resources (gasless, requires signer)
+    - Withdrawals: Move USDC from Gateway back to wallet (requires signer + tx_executor)
     - Balance queries: Check wallet and Gateway balances
 
     Args:
         chain: Chain name (e.g., 'arcTestnet', 'baseSepolia')
-        signer: Signer instance (implements Signer protocol)
+        signer: Signer instance for EIP-712 signing (pay, withdraw intent)
+        tx_executor: TxExecutor instance for onchain transactions (deposit, withdraw mint)
         rpc_url: Optional custom RPC URL
-        private_key: DEPRECATED - use signer instead. Kept for backwards compat.
+        private_key: Convenience shorthand — creates both PrivateKeySigner + BoaTxExecutor
     """
 
     def __init__(
         self,
         chain: str,
         signer: Optional[Signer] = None,
+        tx_executor: Optional[TxExecutor] = None,
         rpc_url: Optional[str] = None,
         private_key: Optional[str] = None,
     ):
         self._chain = chain
         self._rpc_url = rpc_url
 
-        # Support both signer and legacy private_key
-        if signer is not None:
+        if private_key is not None:
+            pk_signer = PrivateKeySigner(private_key)
+            if signer is not None and signer.address != pk_signer.address:
+                raise ValueError(
+                    f"signer address {signer.address} does not match "
+                    f"private_key address {pk_signer.address}"
+                )
+            self._signer = signer or pk_signer
+            self._tx_executor = tx_executor or BoaTxExecutor(private_key)
+        elif signer is not None:
             self._signer = signer
-            self._private_key = None
-        elif private_key is not None:
-            self._signer = PrivateKeySigner(private_key)
-            self._private_key = private_key
+            self._tx_executor = tx_executor  # may be None
         else:
             raise ValueError("Either signer or private_key is required")
 
@@ -203,8 +210,7 @@ class GatewayClient:
         This is a one-time setup step. Once you have a Gateway balance,
         you can make gasless payments.
 
-        Note: Requires a private_key (not just a signer) because on-chain
-        transactions go through titanoboa.
+        Requires a tx_executor (or private_key) for onchain transactions.
 
         Args:
             amount: Amount to deposit in decimal (e.g., '10.5')
@@ -213,8 +219,8 @@ class GatewayClient:
         Returns:
             DepositResult with transaction hashes
         """
-        if self._private_key is None:
-            raise ValueError("deposit() requires private_key (on-chain transaction)")
+        if self._tx_executor is None:
+            raise ValueError("deposit() requires a tx_executor or private_key")
 
         amount_raw = parse_usdc(amount)
         approve_raw = parse_usdc(approve_amount) if approve_amount else amount_raw
@@ -226,7 +232,7 @@ class GatewayClient:
         # Step 1: Check current allowance
         current_allowance = await loop.run_in_executor(
             None,
-            check_allowance,
+            self._tx_executor.check_allowance,
             self._chain,
             self.address,
             self._config.gateway_address,
@@ -237,9 +243,9 @@ class GatewayClient:
         if current_allowance < amount_raw:
             approval_tx_hash = await loop.run_in_executor(
                 None,
-                execute_approve,
+                self._tx_executor.execute_approve,
                 self._chain,
-                self._private_key,
+                self.address,
                 self._config.gateway_address,
                 approve_raw,
                 self._rpc_url,
@@ -248,9 +254,9 @@ class GatewayClient:
         # Step 3: Execute deposit
         deposit_tx_hash = await loop.run_in_executor(
             None,
-            execute_deposit,
+            self._tx_executor.execute_deposit,
             self._chain,
-            self._private_key,
+            self.address,
             amount_raw,
             self._rpc_url,
         )
@@ -382,6 +388,8 @@ class GatewayClient:
         4. Receive {attestation, signature} back
         5. Call gatewayMint on destination chain's minter contract
 
+        Requires both signer (for step 2) and tx_executor (for step 5).
+
         Args:
             amount: Amount to withdraw in decimal (e.g., '5.0')
             chain: Destination chain (default: same chain as client)
@@ -391,6 +399,9 @@ class GatewayClient:
         Returns:
             WithdrawResult with transaction info
         """
+        if self._tx_executor is None:
+            raise ValueError("withdraw() requires a tx_executor or private_key")
+
         amount_raw = parse_usdc(amount)
         dest_chain = chain or self._chain
         dest_recipient = recipient or self.address
@@ -540,15 +551,40 @@ class GatewayClient:
 
         result = response.json()
 
-        # The response contains attestation + signature for minting
-        tx_hash = ""
+        # Extract attestation, signature, and transfer ID from API response
         if isinstance(result, list) and len(result) > 0:
-            tx_hash = result[0].get("transactionHash", "")
+            transfer_data = result[0]
         elif isinstance(result, dict):
-            tx_hash = result.get("transactionHash", "")
+            transfer_data = result
+        else:
+            transfer_data = {}
+
+        attestation = transfer_data.get("attestation", "")
+        mint_signature = transfer_data.get("signature", "")
+        transfer_id = transfer_data.get("transferId", transfer_data.get("transactionHash", ""))
+
+        if not attestation or not mint_signature:
+            raise ValueError(
+                "Withdrawal API response missing attestation or signature. "
+                f"Got keys: {list(transfer_data.keys())}"
+            )
+
+        # Execute gatewayMint on the destination chain.
+        # Don't pass self._rpc_url — it's for the source chain. The destination
+        # chain's TxExecutor/boa_utils will use its own default RPC.
+        loop = asyncio.get_event_loop()
+        mint_tx_hash = await loop.run_in_executor(
+            None,
+            self._tx_executor.execute_gateway_mint,
+            dest_chain,
+            attestation,
+            mint_signature,
+            None,
+        )
 
         return WithdrawResult(
-            mint_tx_hash=tx_hash,
+            mint_tx_hash=mint_tx_hash,
+            transfer_id=transfer_id,
             amount=amount_raw,
             formatted_amount=format_usdc(amount_raw),
             source_chain=self._config.name,
