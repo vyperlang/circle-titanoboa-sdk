@@ -48,13 +48,16 @@ from circlekit.boa_utils import (
     get_gateway_balance as _boa_get_gateway_balance,
     get_withdrawal_delay as _boa_get_withdrawal_delay,
     get_withdrawal_block as _boa_get_withdrawal_block,
+    get_block_number as _boa_get_block_number,
 )
 from circlekit.signer import Signer, PrivateKeySigner
 from circlekit.tx_executor import TxExecutor, BoaTxExecutor
 from circlekit.x402 import (
     get_payment_required,
     decode_payment_response,
+    create_payment_payload,
     create_payment_header,
+    PaymentPayload,
     PaymentRequirements,
     X402Response,
     PAYMENT_SIGNATURE_HEADER,
@@ -74,6 +77,7 @@ class DepositResult:
     deposit_tx_hash: str
     amount: int
     formatted_amount: str
+    depositor: str
 
 
 @dataclass
@@ -293,7 +297,30 @@ class GatewayClient:
             deposit_tx_hash=deposit_tx_hash,
             amount=amount_raw,
             formatted_amount=format_usdc(amount_raw),
+            depositor=self.address,
         )
+
+    def create_payment_payload(
+        self,
+        requirements: PaymentRequirements,
+        x402_version: int = 1,
+    ) -> PaymentPayload:
+        """
+        Create a signed payment payload for the given requirements.
+
+        This is a lower-level primitive — most callers should use pay() instead,
+        which handles the full 402 negotiation automatically.
+
+        Args:
+            requirements: Payment requirements (from a 402 response)
+            x402_version: x402 protocol version (default: 1)
+
+        Returns:
+            PaymentPayload with signature and authorization
+        """
+        if self._signer is None:
+            raise ValueError("create_payment_payload() requires a signer or private_key")
+        return create_payment_payload(self._signer, requirements, x402_version)
 
     async def pay(
         self,
@@ -343,7 +370,7 @@ class GatewayClient:
             return PayResult(
                 data=response.json() if response.headers.get("content-type", "").startswith("application/json") else response.text,
                 amount=0,
-                formatted_amount="$0.00",
+                formatted_amount="0",
                 transaction="",
                 status=response.status_code,
             )
@@ -918,6 +945,7 @@ class GatewayClient:
             deposit_tx_hash=deposit_tx_hash,
             amount=amount_raw,
             formatted_amount=format_usdc(amount_raw),
+            depositor=depositor,
         )
 
     async def get_trustless_withdrawal_delay(self) -> int:
@@ -1020,15 +1048,21 @@ class GatewayClient:
         if self._tx_executor is None:
             raise ValueError("complete_trustless_withdrawal() requires a tx_executor or private_key")
 
+        loop = asyncio.get_event_loop()
+
         # Preflight: check that there's something withdrawable
         balances = await self.get_gateway_balance()
         if balances.withdrawable <= 0:
-            raise ValueError(
-                "No withdrawable balance. Either no withdrawal was initiated "
-                "or the withdrawal delay has not passed yet."
+            withdrawal_block = await self.get_trustless_withdrawal_block()
+            if withdrawal_block == 0:
+                raise ValueError("No withdrawal has been initiated.")
+            current_block = await loop.run_in_executor(
+                None, _boa_get_block_number, self._chain, self._rpc_url,
             )
-
-        loop = asyncio.get_event_loop()
+            raise ValueError(
+                f"Withdrawal not yet available. Current block: {current_block}, "
+                f"withdrawal block: {withdrawal_block}."
+            )
         tx_hash = await loop.run_in_executor(
             None,
             self._tx_executor.execute_complete_withdrawal,

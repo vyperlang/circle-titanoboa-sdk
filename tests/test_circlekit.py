@@ -1270,21 +1270,43 @@ class TestGatewayClientParity:
         await client.close()
 
     @pytest.mark.asyncio
-    async def test_complete_trustless_withdrawal_rejects_zero_withdrawable(self):
-        """complete_trustless_withdrawal() raises if withdrawable is 0."""
+    async def test_complete_trustless_withdrawal_rejects_no_initiation(self):
+        """complete_trustless_withdrawal() raises if no withdrawal was initiated."""
         from circlekit.client import GatewayClient
         client = GatewayClient(
             chain="arcTestnet",
             private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
         )
-        with patch.object(client._http, 'post', new_callable=AsyncMock) as mock_post:
+        with patch.object(client._http, 'post', new_callable=AsyncMock) as mock_post, \
+             patch("circlekit.client._boa_get_withdrawal_block", return_value=0):
             mock_balance_response = MagicMock()
             mock_balance_response.status_code = 200
             mock_balance_response.json.return_value = {
                 "balances": [{"balance": "5.0", "withdrawing": "0", "withdrawable": "0"}]
             }
             mock_post.return_value = mock_balance_response
-            with pytest.raises(ValueError, match="No withdrawable balance"):
+            with pytest.raises(ValueError, match="No withdrawal has been initiated"):
+                await client.complete_trustless_withdrawal()
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_complete_trustless_withdrawal_rejects_not_yet_available(self):
+        """complete_trustless_withdrawal() raises with block info if delay hasn't passed."""
+        from circlekit.client import GatewayClient
+        client = GatewayClient(
+            chain="arcTestnet",
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        with patch.object(client._http, 'post', new_callable=AsyncMock) as mock_post, \
+             patch("circlekit.client._boa_get_withdrawal_block", return_value=1000), \
+             patch("circlekit.client._boa_get_block_number", return_value=500):
+            mock_balance_response = MagicMock()
+            mock_balance_response.status_code = 200
+            mock_balance_response.json.return_value = {
+                "balances": [{"balance": "5.0", "withdrawing": "1.0", "withdrawable": "0"}]
+            }
+            mock_post.return_value = mock_balance_response
+            with pytest.raises(ValueError, match="Withdrawal not yet available.*Current block: 500.*withdrawal block: 1000"):
                 await client.complete_trustless_withdrawal()
         await client.close()
 

@@ -322,6 +322,16 @@ def generate_nonce() -> bytes:
     return os.urandom(32)
 
 
+def get_block_number(chain: str, rpc_url: Optional[str] = None) -> int:
+    """
+    Get the current block number for a chain.
+
+    Uses titanoboa's RPC connection.
+    """
+    setup_boa_env(chain, rpc_url)
+    return boa.env.vm.state.block_number
+
+
 def get_block_timestamp(chain: str, rpc_url: Optional[str] = None) -> int:
     """
     Get the current block timestamp for a chain.

@@ -83,7 +83,7 @@ class PaymentRequirements:
     @property
     def amount_formatted(self) -> str:
         """Format the amount as human-readable USDC."""
-        return f"${int(self.amount) / 10**USDC_DECIMALS:.6f}"
+        return f"{int(self.amount) / 10**USDC_DECIMALS:.6f}"
 
 
 @dataclass
@@ -163,7 +163,7 @@ class PaymentInfo:
     @property
     def amount_formatted(self) -> str:
         """Format the amount as human-readable USDC."""
-        return f"${int(self.amount) / 10**USDC_DECIMALS:.6f}"
+        return f"{int(self.amount) / 10**USDC_DECIMALS:.6f}"
 
 
 def _parse_x402_dict(data: Dict) -> X402Response:
