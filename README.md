@@ -181,19 +181,36 @@ async def read_value(request: Request):
 
 ### GatewayClient
 
+`GatewayClient` separates two wallet capabilities:
+
+| Capability | Protocol | Used by |
+|------------|----------|---------|
+| **EIP-712 signing** | `Signer` | `pay()`, `withdraw()` intent |
+| **Onchain tx execution** | `TxExecutor` | `deposit()`, `withdraw()` mint |
+
 ```python
 from circlekit import GatewayClient
 
+# Simple — private_key creates both a Signer and TxExecutor:
 client = GatewayClient(
-    chain="arcTestnet",      # Chain name
-    private_key="0x...",     # Private key for signing
+    chain="arcTestnet",
+    private_key="0x...",
     rpc_url=None             # Optional custom RPC
 )
 
-# Or with a custom Signer:
+# Pay-only — signer is enough for gasless payments:
 from circlekit import PrivateKeySigner
 signer = PrivateKeySigner("0x...")
 client = GatewayClient(chain="arcTestnet", signer=signer)
+# client.pay() works; client.deposit()/withdraw() raise ValueError
+
+# Advanced — inject capabilities separately:
+from circlekit import BoaTxExecutor
+client = GatewayClient(
+    chain="arcTestnet",
+    signer=my_signer,
+    tx_executor=BoaTxExecutor("0x..."),
+)
 
 # Properties
 client.address      # Your wallet address
@@ -202,11 +219,25 @@ client.chain_id     # 5042002
 client.domain       # 26 (Gateway domain)
 
 # Methods
-result = await client.pay(url)                    # Pay for resource (gasless)
-balances = await client.get_balances()            # Check balances
+result = await client.pay(url)                    # Pay for resource (gasless, needs Signer)
+balances = await client.get_balances()            # Check balances (no capability needed)
 support = await client.supports(url)              # Check if URL accepts payments
-await client.deposit("10.0")                      # Deposit USDC to Gateway
-await client.withdraw("5.0", chain="baseSepolia") # Withdraw to another chain
+await client.deposit("10.0")                      # Deposit USDC to Gateway (needs TxExecutor)
+await client.withdraw("5.0", chain="baseSepolia") # Withdraw to another chain (needs both)
+```
+
+#### TxExecutor
+
+`TxExecutor` is a `Protocol` for executing onchain transactions. `BoaTxExecutor` is the default implementation using titanoboa with a private key.
+
+```python
+from circlekit import TxExecutor, BoaTxExecutor
+
+# Default implementation:
+executor = BoaTxExecutor("0xPrivateKey...")
+
+# Custom implementations can wrap any execution backend (e.g., Circle
+# Programmable Wallets) — just implement the TxExecutor protocol.
 ```
 
 ### create_gateway_middleware
@@ -336,6 +367,7 @@ circlekit/
 ├── __init__.py            # Package exports
 ├── constants.py           # Chain configs, gateway addresses, protocol constants
 ├── signer.py              # Signer protocol + PrivateKeySigner (EIP-712)
+├── tx_executor.py         # TxExecutor protocol + BoaTxExecutor (onchain txs)
 ├── facilitator.py         # BatchFacilitatorClient (Gateway API verify/settle)
 ├── boa_utils.py           # titanoboa helpers, contract ABIs, transactions
 ├── x402.py                # x402 protocol (parse 402, create signatures, headers)
