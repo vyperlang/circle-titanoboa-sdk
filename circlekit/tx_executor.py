@@ -19,7 +19,10 @@ class TxExecutor(Protocol):
 
     def execute_approve(self, chain: str, owner: str, spender: str, amount: int, rpc_url: str | None = None) -> str: ...
     def execute_deposit(self, chain: str, owner: str, amount: int, rpc_url: str | None = None) -> str: ...
+    def execute_deposit_for(self, chain: str, owner: str, depositor: str, amount: int, rpc_url: str | None = None) -> str: ...
     def execute_gateway_mint(self, chain: str, attestation: str | bytes, signature: str | bytes, rpc_url: str | None = None) -> str: ...
+    def execute_initiate_withdrawal(self, chain: str, owner: str, amount: int, rpc_url: str | None = None) -> str: ...
+    def execute_complete_withdrawal(self, chain: str, owner: str, rpc_url: str | None = None) -> str: ...
     def check_allowance(self, chain: str, owner: str, spender: str, rpc_url: str | None = None) -> int: ...
 
 
@@ -54,10 +57,19 @@ class BoaTxExecutor:
     def execute_deposit(self, chain: str, owner: str, amount: int, rpc_url: str | None = None) -> str:
         return boa_utils.execute_deposit(chain, self._private_key, amount, rpc_url)
 
+    def execute_deposit_for(self, chain: str, owner: str, depositor: str, amount: int, rpc_url: str | None = None) -> str:
+        return boa_utils.execute_deposit_for(chain, self._private_key, depositor, amount, rpc_url)
+
     def execute_gateway_mint(self, chain: str, attestation: str | bytes, signature: str | bytes, rpc_url: str | None = None) -> str:
         att = _normalize_bytes(attestation)
         sig = _normalize_bytes(signature)
         return boa_utils.execute_gateway_mint(chain, self._private_key, att, sig, rpc_url)
+
+    def execute_initiate_withdrawal(self, chain: str, owner: str, amount: int, rpc_url: str | None = None) -> str:
+        return boa_utils.execute_initiate_withdrawal(chain, self._private_key, amount, rpc_url)
+
+    def execute_complete_withdrawal(self, chain: str, owner: str, rpc_url: str | None = None) -> str:
+        return boa_utils.execute_complete_withdrawal(chain, self._private_key, rpc_url)
 
     def check_allowance(self, chain: str, owner: str, spender: str, rpc_url: str | None = None) -> int:
         return boa_utils.check_allowance(chain, owner, spender, rpc_url)

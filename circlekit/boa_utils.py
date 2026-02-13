@@ -310,7 +310,7 @@ def parse_usdc(amount: str) -> int:
     """
     Parse a human-readable USDC amount to raw integer (6 decimals).
 
-    Uses Decimal for proper rounding (matches TS Math.round behavior).
+    Uses Decimal for proper rounding (half-up).
     """
     if amount.startswith("$"):
         amount = amount[1:]
@@ -508,6 +508,154 @@ def check_allowance(
     factory = boa.loads_abi(json.dumps(ERC20_ABI))
     usdc = factory.at(config.usdc_address)
     return usdc.allowance(owner, spender)
+
+
+def get_withdrawal_delay(
+    chain: str,
+    rpc_url: Optional[str] = None,
+) -> int:
+    """
+    Get the trustless withdrawal delay (in blocks) from the Gateway contract.
+
+    Args:
+        chain: Chain name
+        rpc_url: Optional custom RPC URL
+
+    Returns:
+        Withdrawal delay in blocks
+    """
+    setup_boa_env(chain, rpc_url)
+
+    factory = boa.loads_abi(json.dumps(GATEWAY_WALLET_ABI))
+    config = get_chain_config(chain)
+    gateway = factory.at(config.gateway_address)
+    return gateway.withdrawalDelay()
+
+
+def get_withdrawal_block(
+    chain: str,
+    address: str,
+    rpc_url: Optional[str] = None,
+) -> int:
+    """
+    Get the block number at which a trustless withdrawal becomes completable.
+
+    Args:
+        chain: Chain name
+        address: Depositor address
+        rpc_url: Optional custom RPC URL
+
+    Returns:
+        Block number (0 if no pending withdrawal)
+    """
+    config = get_chain_config(chain)
+    setup_boa_env(chain, rpc_url)
+
+    factory = boa.loads_abi(json.dumps(GATEWAY_WALLET_ABI))
+    gateway = factory.at(config.gateway_address)
+    return gateway.withdrawalBlock(config.usdc_address, address)
+
+
+def execute_initiate_withdrawal(
+    chain: str,
+    private_key: str,
+    amount: int,
+    rpc_url: Optional[str] = None,
+) -> str:
+    """
+    Initiate a trustless withdrawal from the Gateway contract.
+
+    Args:
+        chain: Chain name
+        private_key: Hex-encoded private key
+        amount: Amount to withdraw (raw, 6 decimals)
+        rpc_url: Optional custom RPC URL
+
+    Returns:
+        Transaction hash
+    """
+    config = get_chain_config(chain)
+    address, env = setup_boa_with_account(chain, private_key, rpc_url)
+
+    factory = boa.loads_abi(json.dumps(GATEWAY_WALLET_ABI))
+    gateway = factory.at(config.gateway_address)
+
+    tx = gateway.initiateWithdrawal(config.usdc_address, amount)
+
+    try:
+        if hasattr(boa.env, 'last_tx') and boa.env.last_tx:
+            return boa.env.last_tx.hex() if hasattr(boa.env.last_tx, 'hex') else str(boa.env.last_tx)
+        return str(tx) if tx else ""
+    except Exception:
+        return str(tx) if tx else ""
+
+
+def execute_complete_withdrawal(
+    chain: str,
+    private_key: str,
+    rpc_url: Optional[str] = None,
+) -> str:
+    """
+    Complete a trustless withdrawal from the Gateway contract.
+
+    Args:
+        chain: Chain name
+        private_key: Hex-encoded private key
+        rpc_url: Optional custom RPC URL
+
+    Returns:
+        Transaction hash
+    """
+    config = get_chain_config(chain)
+    address, env = setup_boa_with_account(chain, private_key, rpc_url)
+
+    factory = boa.loads_abi(json.dumps(GATEWAY_WALLET_ABI))
+    gateway = factory.at(config.gateway_address)
+
+    tx = gateway.withdraw(config.usdc_address)
+
+    try:
+        if hasattr(boa.env, 'last_tx') and boa.env.last_tx:
+            return boa.env.last_tx.hex() if hasattr(boa.env.last_tx, 'hex') else str(boa.env.last_tx)
+        return str(tx) if tx else ""
+    except Exception:
+        return str(tx) if tx else ""
+
+
+def execute_deposit_for(
+    chain: str,
+    private_key: str,
+    depositor: str,
+    amount: int,
+    rpc_url: Optional[str] = None,
+) -> str:
+    """
+    Deposit USDC into the Gateway contract on behalf of another address.
+
+    Args:
+        chain: Chain name
+        private_key: Hex-encoded private key
+        depositor: Address to credit the deposit to
+        amount: Amount to deposit (raw, 6 decimals)
+        rpc_url: Optional custom RPC URL
+
+    Returns:
+        Transaction hash
+    """
+    config = get_chain_config(chain)
+    address, env = setup_boa_with_account(chain, private_key, rpc_url)
+
+    factory = boa.loads_abi(json.dumps(GATEWAY_WALLET_ABI))
+    gateway = factory.at(config.gateway_address)
+
+    tx = gateway.depositFor(config.usdc_address, depositor, amount)
+
+    try:
+        if hasattr(boa.env, 'last_tx') and boa.env.last_tx:
+            return boa.env.last_tx.hex() if hasattr(boa.env.last_tx, 'hex') else str(boa.env.last_tx)
+        return str(tx) if tx else ""
+    except Exception:
+        return str(tx) if tx else ""
 
 
 def get_usdc_balance(

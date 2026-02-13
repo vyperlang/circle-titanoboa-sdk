@@ -189,7 +189,7 @@ class TestBoaUtils:
         assert parse_usdc("$1.50") == 1500000
 
     def test_parse_usdc_rounding(self):
-        """parse_usdc should round, not truncate (matches TS Math.round)."""
+        """parse_usdc should round, not truncate (half-up)."""
         from circlekit.boa_utils import parse_usdc
         # $0.019999 * 1e6 = 19999.0 -> rounds to 19999
         assert parse_usdc("$0.019999") == 19999
@@ -804,7 +804,7 @@ class TestGatewayClient:
 
     @pytest.mark.asyncio
     async def test_supports_returns_false_for_free_resource(self):
-        """supports() must return False for non-402 (per TS SDK)."""
+        """supports() must return False for non-402."""
         from circlekit.client import GatewayClient
         client = GatewayClient(
             chain="arcTestnet",
@@ -864,9 +864,14 @@ class TestGatewayClientDepositWithdraw:
             chain="arcTestnet",
             private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
         )
-        with patch.object(client._tx_executor, 'check_allowance', return_value=0) as mock_check, \
+        with patch.object(client._http, 'post', new_callable=AsyncMock) as mock_post, \
+             patch.object(client._tx_executor, 'check_allowance', return_value=0) as mock_check, \
              patch.object(client._tx_executor, 'execute_approve', return_value="0xapproval") as mock_approve, \
              patch.object(client._tx_executor, 'execute_deposit', return_value="0xdeposit") as mock_deposit:
+            # Mock get_usdc_balance RPC call (10 USDC)
+            mock_rpc = MagicMock()
+            mock_rpc.json.return_value = {"jsonrpc": "2.0", "id": 1, "result": "0x989680"}
+            mock_post.return_value = mock_rpc
             result = await client.deposit("1.0")
             mock_check.assert_called_once()
             mock_approve.assert_called_once()
@@ -883,9 +888,14 @@ class TestGatewayClientDepositWithdraw:
             chain="arcTestnet",
             private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
         )
-        with patch.object(client._tx_executor, 'check_allowance', return_value=10000000), \
+        with patch.object(client._http, 'post', new_callable=AsyncMock) as mock_post, \
+             patch.object(client._tx_executor, 'check_allowance', return_value=10000000), \
              patch.object(client._tx_executor, 'execute_approve') as mock_approve, \
              patch.object(client._tx_executor, 'execute_deposit', return_value="0xdeposit"):
+            # Mock get_usdc_balance RPC call (10 USDC)
+            mock_rpc = MagicMock()
+            mock_rpc.json.return_value = {"jsonrpc": "2.0", "id": 1, "result": "0x989680"}
+            mock_post.return_value = mock_rpc
             result = await client.deposit("1.0")
             mock_approve.assert_not_called()
             assert result.approval_tx_hash is None
@@ -901,17 +911,24 @@ class TestGatewayClientDepositWithdraw:
         )
         with patch.object(client._http, 'post', new_callable=AsyncMock) as mock_post, \
              patch.object(client._tx_executor, 'execute_gateway_mint', return_value="0xmint_tx") as mock_mint:
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            mock_response.json.return_value = [{
+            # First call: get_gateway_balance preflight
+            mock_balance_response = MagicMock()
+            mock_balance_response.status_code = 200
+            mock_balance_response.json.return_value = {
+                "balances": [{"balance": "10.0", "withdrawing": "0", "withdrawable": "0"}]
+            }
+            # Second call: /v1/transfer
+            mock_transfer_response = MagicMock()
+            mock_transfer_response.status_code = 200
+            mock_transfer_response.json.return_value = [{
                 "attestation": "0xaabb",
                 "signature": "0xccdd",
                 "transferId": "transfer-123",
             }]
-            mock_post.return_value = mock_response
+            mock_post.side_effect = [mock_balance_response, mock_transfer_response]
             result = await client.withdraw("5.0")
-            # Verify it called /v1/transfer
-            call_args = mock_post.call_args
+            # Verify it called /v1/transfer (second post call)
+            call_args = mock_post.call_args_list[1]
             assert "/v1/transfer" in call_args[0][0]
             # Verify gatewayMint was called on the destination chain
             mock_mint.assert_called_once()
@@ -922,21 +939,28 @@ class TestGatewayClientDepositWithdraw:
 
     @pytest.mark.asyncio
     async def test_withdraw_uses_burn_intent_types(self):
-        """withdraw() should send burnIntent with nested TransferSpec."""
-        from circlekit.client import GatewayClient
+        """withdraw() should send burnIntent with nested TransferSpec (version=1)."""
+        from circlekit.client import GatewayClient, DEFAULT_WITHDRAW_MAX_FEE
         client = GatewayClient(
             chain="arcTestnet",
             private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
         )
         with patch.object(client._http, 'post', new_callable=AsyncMock) as mock_post, \
              patch.object(client._tx_executor, 'execute_gateway_mint', return_value="0xmint"):
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            mock_response.json.return_value = [{"attestation": "0x01", "signature": "0x02", "transferId": "t1"}]
-            mock_post.return_value = mock_response
+            # First call: get_gateway_balance preflight
+            mock_balance_response = MagicMock()
+            mock_balance_response.status_code = 200
+            mock_balance_response.json.return_value = {
+                "balances": [{"balance": "10.0", "withdrawing": "0", "withdrawable": "0"}]
+            }
+            # Second call: /v1/transfer
+            mock_transfer_response = MagicMock()
+            mock_transfer_response.status_code = 200
+            mock_transfer_response.json.return_value = [{"attestation": "0x01", "signature": "0x02", "transferId": "t1"}]
+            mock_post.side_effect = [mock_balance_response, mock_transfer_response]
             await client.withdraw("1.0")
             # The JSON body should be a list with a burnIntent + signature
-            call_kwargs = mock_post.call_args
+            call_kwargs = mock_post.call_args_list[1]
             body = call_kwargs[1]["json"]
             assert isinstance(body, list)
             assert "burnIntent" in body[0]
@@ -945,8 +969,10 @@ class TestGatewayClientDepositWithdraw:
             burn_intent = body[0]["burnIntent"]
             assert "maxBlockHeight" in burn_intent
             assert "maxFee" in burn_intent
+            assert burn_intent["maxFee"] == str(DEFAULT_WITHDRAW_MAX_FEE)
             assert "spec" in burn_intent
             spec = burn_intent["spec"]
+            assert spec["version"] == 1
             assert "sourceDomain" in spec
             assert "destinationDomain" in spec
             assert "sourceDepositor" in spec
@@ -1031,10 +1057,15 @@ class TestGatewayClientDepositWithdraw:
             private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
         )
         with patch.object(client._http, 'post', new_callable=AsyncMock) as mock_post:
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            mock_response.json.return_value = [{"transferId": "t1"}]  # no attestation/signature
-            mock_post.return_value = mock_response
+            mock_balance_response = MagicMock()
+            mock_balance_response.status_code = 200
+            mock_balance_response.json.return_value = {
+                "balances": [{"balance": "10.0", "withdrawing": "0", "withdrawable": "0"}]
+            }
+            mock_transfer_response = MagicMock()
+            mock_transfer_response.status_code = 200
+            mock_transfer_response.json.return_value = [{"transferId": "t1"}]  # no attestation/signature
+            mock_post.side_effect = [mock_balance_response, mock_transfer_response]
             with pytest.raises(ValueError, match="missing attestation or signature"):
                 await client.withdraw("1.0")
         await client.close()
@@ -1050,14 +1081,19 @@ class TestGatewayClientDepositWithdraw:
         )
         with patch.object(client._http, 'post', new_callable=AsyncMock) as mock_post, \
              patch.object(client._tx_executor, 'execute_gateway_mint', return_value="0xmint") as mock_mint:
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            mock_response.json.return_value = [{
+            mock_balance_response = MagicMock()
+            mock_balance_response.status_code = 200
+            mock_balance_response.json.return_value = {
+                "balances": [{"balance": "10.0", "withdrawing": "0", "withdrawable": "0"}]
+            }
+            mock_transfer_response = MagicMock()
+            mock_transfer_response.status_code = 200
+            mock_transfer_response.json.return_value = [{
                 "attestation": "0xaa",
                 "signature": "0xbb",
                 "transferId": "t1",
             }]
-            mock_post.return_value = mock_response
+            mock_post.side_effect = [mock_balance_response, mock_transfer_response]
             await client.withdraw("1.0", chain="baseSepolia")
             # rpc_url passed to gatewayMint must be None, not the source-chain override
             _, kwargs = mock_mint.call_args
@@ -1106,6 +1142,574 @@ class TestGatewayClientDepositWithdraw:
         signer = LowercaseAddressSigner(key)
         client = GatewayClient(chain="arcTestnet", signer=signer, private_key=key)
         assert client.address == signer.address
+
+
+# ============================================================================
+# TEST: client.py parity (F2-F7)
+# ============================================================================
+
+class TestGatewayClientParity:
+    """Test parity fixes: version, maxFee, balances, trustless withdrawal, depositFor, transfer alias."""
+
+    @pytest.mark.asyncio
+    async def test_deposit_for_delegates_to_tx_executor(self):
+        """deposit_for() should check allowance, approve, and call execute_deposit_for."""
+        from circlekit.client import GatewayClient
+        client = GatewayClient(
+            chain="arcTestnet",
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        with patch.object(client._http, 'post', new_callable=AsyncMock) as mock_post, \
+             patch.object(client._tx_executor, 'check_allowance', return_value=0) as mock_check, \
+             patch.object(client._tx_executor, 'execute_approve', return_value="0xapproval") as mock_approve, \
+             patch.object(client._tx_executor, 'execute_deposit_for', return_value="0xdep_for") as mock_dep_for:
+            # Mock get_usdc_balance RPC call (10 USDC)
+            mock_rpc = MagicMock()
+            mock_rpc.json.return_value = {"jsonrpc": "2.0", "id": 1, "result": "0x989680"}
+            mock_post.return_value = mock_rpc
+            result = await client.deposit_for("1.0", depositor="0xDeAdBeEf00000000000000000000000000000000")
+            mock_check.assert_called_once()
+            mock_approve.assert_called_once()
+            mock_dep_for.assert_called_once()
+            # Verify the depositor was passed through
+            dep_for_args = mock_dep_for.call_args[0]
+            assert dep_for_args[2] == "0xDeAdBeEf00000000000000000000000000000000"
+            assert result.deposit_tx_hash == "0xdep_for"
+            assert result.amount == 1000000
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_transfer_is_withdraw_alias(self):
+        """transfer() should delegate to withdraw() with a deprecation warning."""
+        from circlekit.client import GatewayClient
+        import warnings
+        client = GatewayClient(
+            chain="arcTestnet",
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        with patch.object(client._http, 'post', new_callable=AsyncMock) as mock_post, \
+             patch.object(client._tx_executor, 'execute_gateway_mint', return_value="0xmint"):
+            mock_balance_response = MagicMock()
+            mock_balance_response.status_code = 200
+            mock_balance_response.json.return_value = {
+                "balances": [{"balance": "10.0", "withdrawing": "0", "withdrawable": "0"}]
+            }
+            mock_transfer_response = MagicMock()
+            mock_transfer_response.status_code = 200
+            mock_transfer_response.json.return_value = [{
+                "attestation": "0xaa", "signature": "0xbb", "transferId": "t1",
+            }]
+            mock_post.side_effect = [mock_balance_response, mock_transfer_response]
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                result = await client.transfer("1.0", destination_chain="arcTestnet")
+                assert len(w) == 1
+                assert issubclass(w[0].category, DeprecationWarning)
+                assert "deprecated" in str(w[0].message).lower()
+            assert result.amount == 1000000
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_trustless_withdrawal_delay(self):
+        """get_trustless_withdrawal_delay() should call boa_utils view function."""
+        from circlekit.client import GatewayClient
+        client = GatewayClient(
+            chain="arcTestnet",
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        with patch("circlekit.client._boa_get_withdrawal_delay", return_value=100) as mock_delay:
+            result = await client.get_trustless_withdrawal_delay()
+            assert result == 100
+            mock_delay.assert_called_once_with("arcTestnet", None)
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_initiate_trustless_withdrawal(self):
+        """initiate_trustless_withdrawal() should call tx_executor and read withdrawal block."""
+        from circlekit.client import GatewayClient
+        client = GatewayClient(
+            chain="arcTestnet",
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        with patch.object(client._http, 'post', new_callable=AsyncMock) as mock_post, \
+             patch.object(client._tx_executor, 'execute_initiate_withdrawal', return_value="0xinit_tx") as mock_init, \
+             patch("circlekit.client._boa_get_withdrawal_block", return_value=12345) as mock_block:
+            mock_balance_response = MagicMock()
+            mock_balance_response.status_code = 200
+            mock_balance_response.json.return_value = {
+                "balances": [{"balance": "10.0", "withdrawing": "0", "withdrawable": "0"}]
+            }
+            mock_post.return_value = mock_balance_response
+            result = await client.initiate_trustless_withdrawal("5.0")
+            mock_init.assert_called_once()
+            assert result.tx_hash == "0xinit_tx"
+            assert result.amount == 5000000
+            assert result.withdrawal_block == 12345
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_complete_trustless_withdrawal(self):
+        """complete_trustless_withdrawal() should check withdrawable > 0 and call tx_executor."""
+        from circlekit.client import GatewayClient
+        client = GatewayClient(
+            chain="arcTestnet",
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        with patch.object(client._http, 'post', new_callable=AsyncMock) as mock_post, \
+             patch.object(client._tx_executor, 'execute_complete_withdrawal', return_value="0xcomplete_tx") as mock_complete:
+            mock_balance_response = MagicMock()
+            mock_balance_response.status_code = 200
+            mock_balance_response.json.return_value = {
+                "balances": [{"balance": "5.0", "withdrawing": "0", "withdrawable": "3.0"}]
+            }
+            mock_post.return_value = mock_balance_response
+            result = await client.complete_trustless_withdrawal()
+            mock_complete.assert_called_once()
+            assert result.tx_hash == "0xcomplete_tx"
+            assert result.amount == 3000000
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_complete_trustless_withdrawal_rejects_zero_withdrawable(self):
+        """complete_trustless_withdrawal() raises if withdrawable is 0."""
+        from circlekit.client import GatewayClient
+        client = GatewayClient(
+            chain="arcTestnet",
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        with patch.object(client._http, 'post', new_callable=AsyncMock) as mock_post:
+            mock_balance_response = MagicMock()
+            mock_balance_response.status_code = 200
+            mock_balance_response.json.return_value = {
+                "balances": [{"balance": "5.0", "withdrawing": "0", "withdrawable": "0"}]
+            }
+            mock_post.return_value = mock_balance_response
+            with pytest.raises(ValueError, match="No withdrawable balance"):
+                await client.complete_trustless_withdrawal()
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_get_gateway_balance_passes_domain(self):
+        """get_gateway_balance() should include domain in the API request."""
+        from circlekit.client import GatewayClient
+        client = GatewayClient(
+            chain="arcTestnet",
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        with patch.object(client._http, 'post', new_callable=AsyncMock) as mock_post:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = {
+                "balances": [{"balance": "5.0", "withdrawing": "1.0", "withdrawable": "0.5"}]
+            }
+            mock_post.return_value = mock_response
+            await client.get_gateway_balance()
+            # Check the request body included domain
+            call_kwargs = mock_post.call_args[1]
+            request_body = call_kwargs["json"]
+            assert request_body["sources"][0]["domain"] == 26  # arcTestnet domain
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_get_gateway_balance_parses_withdrawing_withdrawable(self):
+        """get_gateway_balance() should parse withdrawing and withdrawable from API."""
+        from circlekit.client import GatewayClient
+        client = GatewayClient(
+            chain="arcTestnet",
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        with patch.object(client._http, 'post', new_callable=AsyncMock) as mock_post:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = {
+                "balances": [{"balance": "5.0", "withdrawing": "1.0", "withdrawable": "0.5"}]
+            }
+            mock_post.return_value = mock_response
+            result = await client.get_gateway_balance()
+            assert result.available == 5000000
+            assert result.withdrawing == 1000000
+            assert result.withdrawable == 500000
+            # total = available + withdrawing
+            assert result.total == 6000000
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_get_usdc_balance_standalone(self):
+        """get_usdc_balance() should query on-chain USDC balance via RPC."""
+        from circlekit.client import GatewayClient
+        client = GatewayClient(
+            chain="arcTestnet",
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        with patch.object(client._http, 'post', new_callable=AsyncMock) as mock_post:
+            mock_response = MagicMock()
+            # 10 USDC = 10_000_000 = 0x989680
+            mock_response.json.return_value = {"jsonrpc": "2.0", "id": 1, "result": "0x989680"}
+            mock_post.return_value = mock_response
+            result = await client.get_usdc_balance()
+            assert result.balance == 10000000
+            assert result.formatted == "10.000000"
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_withdraw_preflight_rejects_insufficient_balance(self):
+        """withdraw() should raise if gateway available balance < amount."""
+        from circlekit.client import GatewayClient
+        client = GatewayClient(
+            chain="arcTestnet",
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        with patch.object(client._http, 'post', new_callable=AsyncMock) as mock_post:
+            mock_balance_response = MagicMock()
+            mock_balance_response.status_code = 200
+            mock_balance_response.json.return_value = {
+                "balances": [{"balance": "1.0", "withdrawing": "0", "withdrawable": "0"}]
+            }
+            mock_post.return_value = mock_balance_response
+            with pytest.raises(ValueError, match="Insufficient available balance"):
+                await client.withdraw("5.0")
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_withdraw_preflight_allows_sufficient_balance(self):
+        """withdraw() should proceed when gateway available balance >= amount."""
+        from circlekit.client import GatewayClient
+        client = GatewayClient(
+            chain="arcTestnet",
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        with patch.object(client._http, 'post', new_callable=AsyncMock) as mock_post, \
+             patch.object(client._tx_executor, 'execute_gateway_mint', return_value="0xmint"):
+            mock_balance_response = MagicMock()
+            mock_balance_response.status_code = 200
+            mock_balance_response.json.return_value = {
+                "balances": [{"balance": "5.0", "withdrawing": "0", "withdrawable": "0"}]
+            }
+            mock_transfer_response = MagicMock()
+            mock_transfer_response.status_code = 200
+            mock_transfer_response.json.return_value = [{
+                "attestation": "0xaa", "signature": "0xbb", "transferId": "t1",
+            }]
+            mock_post.side_effect = [mock_balance_response, mock_transfer_response]
+            result = await client.withdraw("5.0")  # exactly matching balance
+            assert result.amount == 5000000
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_get_gateway_balance_raises_on_error(self):
+        """get_gateway_balance() should raise ValueError on non-200 response."""
+        from circlekit.client import GatewayClient
+        client = GatewayClient(
+            chain="arcTestnet",
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        with patch.object(client._http, 'post', new_callable=AsyncMock) as mock_post:
+            mock_response = MagicMock()
+            mock_response.status_code = 500
+            mock_response.text = "Internal Server Error"
+            mock_post.return_value = mock_response
+            with pytest.raises(ValueError, match="Gateway balance query failed"):
+                await client.get_gateway_balance()
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_withdraw_max_fee_default(self):
+        """withdraw() should use DEFAULT_WITHDRAW_MAX_FEE when max_fee is not specified."""
+        from circlekit.client import GatewayClient, DEFAULT_WITHDRAW_MAX_FEE
+        client = GatewayClient(
+            chain="arcTestnet",
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        assert DEFAULT_WITHDRAW_MAX_FEE == 2_010_000
+        with patch.object(client._http, 'post', new_callable=AsyncMock) as mock_post, \
+             patch.object(client._tx_executor, 'execute_gateway_mint', return_value="0xmint"):
+            mock_balance_response = MagicMock()
+            mock_balance_response.status_code = 200
+            mock_balance_response.json.return_value = {
+                "balances": [{"balance": "10.0", "withdrawing": "0", "withdrawable": "0"}]
+            }
+            mock_transfer_response = MagicMock()
+            mock_transfer_response.status_code = 200
+            mock_transfer_response.json.return_value = [{"attestation": "0x01", "signature": "0x02", "transferId": "t1"}]
+            mock_post.side_effect = [mock_balance_response, mock_transfer_response]
+            await client.withdraw("1.0")
+            # Check maxFee in the API call
+            transfer_call = mock_post.call_args_list[1]
+            body = transfer_call[1]["json"]
+            assert body[0]["burnIntent"]["maxFee"] == str(DEFAULT_WITHDRAW_MAX_FEE)
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_withdraw_max_fee_explicit_zero(self):
+        """withdraw(max_fee=0) should override the default and use 0."""
+        from circlekit.client import GatewayClient
+        client = GatewayClient(
+            chain="arcTestnet",
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        with patch.object(client._http, 'post', new_callable=AsyncMock) as mock_post, \
+             patch.object(client._tx_executor, 'execute_gateway_mint', return_value="0xmint"):
+            mock_balance_response = MagicMock()
+            mock_balance_response.status_code = 200
+            mock_balance_response.json.return_value = {
+                "balances": [{"balance": "10.0", "withdrawing": "0", "withdrawable": "0"}]
+            }
+            mock_transfer_response = MagicMock()
+            mock_transfer_response.status_code = 200
+            mock_transfer_response.json.return_value = [{"attestation": "0x01", "signature": "0x02", "transferId": "t1"}]
+            mock_post.side_effect = [mock_balance_response, mock_transfer_response]
+            await client.withdraw("1.0", max_fee=0)
+            transfer_call = mock_post.call_args_list[1]
+            body = transfer_call[1]["json"]
+            assert body[0]["burnIntent"]["maxFee"] == "0"
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_deposit_preflight_rejects_insufficient_usdc(self):
+        """deposit() should raise if wallet USDC balance < amount."""
+        from circlekit.client import GatewayClient
+        client = GatewayClient(
+            chain="arcTestnet",
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        with patch.object(client._http, 'post', new_callable=AsyncMock) as mock_post:
+            # Mock get_usdc_balance RPC call (0.5 USDC = 500000 = 0x7A120)
+            mock_rpc = MagicMock()
+            mock_rpc.json.return_value = {"jsonrpc": "2.0", "id": 1, "result": "0x7A120"}
+            mock_post.return_value = mock_rpc
+            with pytest.raises(ValueError, match="Insufficient USDC balance"):
+                await client.deposit("1.0")
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_deposit_for_preflight_rejects_insufficient_usdc(self):
+        """deposit_for() should raise if wallet USDC balance < amount."""
+        from circlekit.client import GatewayClient
+        client = GatewayClient(
+            chain="arcTestnet",
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        with patch.object(client._http, 'post', new_callable=AsyncMock) as mock_post:
+            # Mock get_usdc_balance RPC call (0.5 USDC)
+            mock_rpc = MagicMock()
+            mock_rpc.json.return_value = {"jsonrpc": "2.0", "id": 1, "result": "0x7A120"}
+            mock_post.return_value = mock_rpc
+            with pytest.raises(ValueError, match="Insufficient USDC balance"):
+                await client.deposit_for("1.0", depositor="0xDeAdBeEf00000000000000000000000000000000")
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_deposit_skip_approval_check(self):
+        """deposit(skip_approval_check=True) should skip approval entirely."""
+        from circlekit.client import GatewayClient
+        client = GatewayClient(
+            chain="arcTestnet",
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        with patch.object(client._http, 'post', new_callable=AsyncMock) as mock_post, \
+             patch.object(client._tx_executor, 'check_allowance') as mock_check, \
+             patch.object(client._tx_executor, 'execute_approve') as mock_approve, \
+             patch.object(client._tx_executor, 'execute_deposit', return_value="0xdeposit"):
+            # Mock get_usdc_balance RPC call (10 USDC)
+            mock_rpc = MagicMock()
+            mock_rpc.json.return_value = {"jsonrpc": "2.0", "id": 1, "result": "0x989680"}
+            mock_post.return_value = mock_rpc
+            result = await client.deposit("1.0", skip_approval_check=True)
+            mock_check.assert_not_called()
+            mock_approve.assert_not_called()
+            assert result.approval_tx_hash is None
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_deposit_for_skip_approval_check(self):
+        """deposit_for(skip_approval_check=True) should skip approval entirely."""
+        from circlekit.client import GatewayClient
+        client = GatewayClient(
+            chain="arcTestnet",
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        with patch.object(client._http, 'post', new_callable=AsyncMock) as mock_post, \
+             patch.object(client._tx_executor, 'check_allowance') as mock_check, \
+             patch.object(client._tx_executor, 'execute_approve') as mock_approve, \
+             patch.object(client._tx_executor, 'execute_deposit_for', return_value="0xdep_for"):
+            mock_rpc = MagicMock()
+            mock_rpc.json.return_value = {"jsonrpc": "2.0", "id": 1, "result": "0x989680"}
+            mock_post.return_value = mock_rpc
+            result = await client.deposit_for(
+                "1.0", depositor="0xDeAdBeEf00000000000000000000000000000000",
+                skip_approval_check=True,
+            )
+            mock_check.assert_not_called()
+            mock_approve.assert_not_called()
+            assert result.approval_tx_hash is None
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_pay_raises_on_non_402_error(self):
+        """pay() should raise httpx.HTTPStatusError on non-402 4xx/5xx responses."""
+        import httpx
+        from circlekit.client import GatewayClient
+        client = GatewayClient(
+            chain="arcTestnet",
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        with patch.object(client._http, 'get', new_callable=AsyncMock) as mock_get:
+            mock_response = MagicMock()
+            mock_response.status_code = 500
+            mock_response.request = MagicMock()
+            mock_get.return_value = mock_response
+            with pytest.raises(httpx.HTTPStatusError, match="status 500"):
+                await client.pay("http://example.com/broken")
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_pay_raises_on_403(self):
+        """pay() should raise on 403 Forbidden (non-402 client error)."""
+        import httpx
+        from circlekit.client import GatewayClient
+        client = GatewayClient(
+            chain="arcTestnet",
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        with patch.object(client._http, 'get', new_callable=AsyncMock) as mock_get:
+            mock_response = MagicMock()
+            mock_response.status_code = 403
+            mock_response.request = MagicMock()
+            mock_get.return_value = mock_response
+            with pytest.raises(httpx.HTTPStatusError):
+                await client.pay("http://example.com/forbidden")
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_pay_raises_on_failed_paid_response(self):
+        """pay() should raise when the paid (second) response is not OK."""
+        import httpx
+        from circlekit.client import GatewayClient
+        from circlekit.x402 import encode_payment_required
+        client = GatewayClient(
+            chain="arcTestnet",
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        header_data = {
+            "x402Version": 2,
+            "resource": {"url": "/api/test"},
+            "accepts": [{
+                "scheme": "exact",
+                "network": "eip155:5042002",
+                "asset": "0x3600000000000000000000000000000000000000",
+                "amount": "10000",
+                "payTo": "0x1234567890123456789012345678901234567890",
+                "maxTimeoutSeconds": 345600,
+                "extra": {
+                    "name": "GatewayWalletBatched",
+                    "version": "1",
+                    "verifyingContract": "0x0077777d7EBA4688BDeF3E311b846F25870A19B9",
+                }
+            }]
+        }
+        encoded_header = encode_payment_required(header_data)
+        with patch.object(client._http, 'get', new_callable=AsyncMock) as mock_get:
+            mock_402 = MagicMock()
+            mock_402.status_code = 402
+            mock_402.headers = {"payment-required": encoded_header}
+            mock_402.content = b"{}"
+            # Paid response returns 500
+            mock_paid = MagicMock()
+            mock_paid.status_code = 500
+            mock_paid.request = MagicMock()
+            mock_get.side_effect = [mock_402, mock_paid]
+            with pytest.raises(httpx.HTTPStatusError, match="Payment failed"):
+                await client.pay("http://example.com/paid")
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_pay_returns_result_on_2xx(self):
+        """pay() should return PayResult for successful 2xx responses."""
+        from circlekit.client import GatewayClient
+        client = GatewayClient(
+            chain="arcTestnet",
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        with patch.object(client._http, 'get', new_callable=AsyncMock) as mock_get:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.headers = {"content-type": "application/json"}
+            mock_response.json.return_value = {"free": True}
+            mock_get.return_value = mock_response
+            result = await client.pay("http://example.com/free")
+            assert result.status == 200
+            assert result.amount == 0
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_get_balance_is_alias_for_get_gateway_balance(self):
+        """get_balance() should return the same result as get_gateway_balance()."""
+        from circlekit.client import GatewayClient
+        client = GatewayClient(
+            chain="arcTestnet",
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        with patch.object(client._http, 'post', new_callable=AsyncMock) as mock_post:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = {
+                "balances": [{"balance": "5.0", "withdrawing": "1.0", "withdrawable": "0.5"}]
+            }
+            mock_post.return_value = mock_response
+            result = await client.get_balance()
+            assert result.available == 5000000
+            assert result.withdrawing == 1000000
+            assert result.withdrawable == 500000
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_withdraw_rejects_api_success_false(self):
+        """withdraw() should raise when API returns success=false."""
+        from circlekit.client import GatewayClient
+        client = GatewayClient(
+            chain="arcTestnet",
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        with patch.object(client._http, 'post', new_callable=AsyncMock) as mock_post:
+            mock_balance_response = MagicMock()
+            mock_balance_response.status_code = 200
+            mock_balance_response.json.return_value = {
+                "balances": [{"balance": "10.0", "withdrawing": "0", "withdrawable": "0"}]
+            }
+            mock_transfer_response = MagicMock()
+            mock_transfer_response.status_code = 200
+            mock_transfer_response.json.return_value = [{
+                "success": False,
+                "error": "Rate limit exceeded",
+            }]
+            mock_post.side_effect = [mock_balance_response, mock_transfer_response]
+            with pytest.raises(ValueError, match="Rate limit exceeded"):
+                await client.withdraw("1.0")
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_withdraw_rejects_api_error_field(self):
+        """withdraw() should raise when API returns an error field."""
+        from circlekit.client import GatewayClient
+        client = GatewayClient(
+            chain="arcTestnet",
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        with patch.object(client._http, 'post', new_callable=AsyncMock) as mock_post:
+            mock_balance_response = MagicMock()
+            mock_balance_response.status_code = 200
+            mock_balance_response.json.return_value = {
+                "balances": [{"balance": "10.0", "withdrawing": "0", "withdrawable": "0"}]
+            }
+            mock_transfer_response = MagicMock()
+            mock_transfer_response.status_code = 200
+            mock_transfer_response.json.return_value = [{
+                "error": "Insufficient funds for fee",
+            }]
+            mock_post.side_effect = [mock_balance_response, mock_transfer_response]
+            with pytest.raises(ValueError, match="Insufficient funds for fee"):
+                await client.withdraw("1.0")
+        await client.close()
 
 
 # ============================================================================
@@ -1342,7 +1946,7 @@ class TestBoaTransactionHelpers:
         assert "withdrawalDelay" in names
         assert "withdrawalBlock" in names
         assert "initiateWithdrawal" in names
-        # balanceOf should NOT be in Gateway ABI (TS SDK doesn't have it)
+        # balanceOf should NOT be in Gateway ABI
         assert "balanceOf" not in names
 
     def test_boa_tx_executor_satisfies_protocol(self):

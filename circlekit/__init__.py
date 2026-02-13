@@ -36,7 +36,7 @@ __version__ = "0.1.0"
 __author__ = "circlekit contributors"
 
 # Re-export main classes for convenience
-from circlekit.client import GatewayClient
+from circlekit.client import GatewayClient, TrustlessWithdrawalResult
 from circlekit.server import create_gateway_middleware
 from circlekit.signer import Signer, PrivateKeySigner
 from circlekit.tx_executor import TxExecutor, BoaTxExecutor
@@ -68,6 +68,7 @@ from circlekit.x402_integration import create_resource_server
 __all__ = [
     # Client
     "GatewayClient",
+    "TrustlessWithdrawalResult",
     # Server
     "create_gateway_middleware",
     # Signer
