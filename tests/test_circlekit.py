@@ -1089,6 +1089,24 @@ class TestGatewayClientDepositWithdraw:
         client = GatewayClient(chain="arcTestnet", signer=signer, private_key=key)
         assert client.address == signer.address
 
+    def test_constructor_allows_matching_address_different_case(self):
+        """Constructor allows signer/private_key when addresses differ only by case."""
+        from circlekit.client import GatewayClient
+        from circlekit.signer import PrivateKeySigner
+
+        class LowercaseAddressSigner:
+            def __init__(self, private_key: str):
+                self._delegate = PrivateKeySigner(private_key)
+                self.address = self._delegate.address.lower()
+
+            def sign_typed_data(self, domain, types, primary_type, message):
+                return self._delegate.sign_typed_data(domain, types, primary_type, message)
+
+        key = "0x0000000000000000000000000000000000000000000000000000000000000001"
+        signer = LowercaseAddressSigner(key)
+        client = GatewayClient(chain="arcTestnet", signer=signer, private_key=key)
+        assert client.address == signer.address
+
 
 # ============================================================================
 # TEST: server.py

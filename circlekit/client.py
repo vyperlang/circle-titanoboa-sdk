@@ -157,7 +157,7 @@ class GatewayClient:
 
         if private_key is not None:
             pk_signer = PrivateKeySigner(private_key)
-            if signer is not None and signer.address != pk_signer.address:
+            if signer is not None and signer.address.lower() != pk_signer.address.lower():
                 raise ValueError(
                     f"signer address {signer.address} does not match "
                     f"private_key address {pk_signer.address}"
