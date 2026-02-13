@@ -93,6 +93,13 @@ class BatchFacilitatorClient:
         self._http = httpx.AsyncClient(timeout=30.0)
         self._create_auth_headers = create_auth_headers
 
+    async def _get_auth_headers(self, endpoint: str) -> Dict[str, str]:
+        """Get auth headers for a specific endpoint."""
+        if self._create_auth_headers is None:
+            return {}
+        auth = await self._create_auth_headers()
+        return auth.get(endpoint, {})
+
     async def verify(
         self,
         payment_payload: Any,
@@ -107,26 +114,33 @@ class BatchFacilitatorClient:
 
         Returns:
             VerifyResponse with is_valid flag
+
+        Raises:
+            ValueError: If the API response is malformed
         """
         payload_dict = _to_dict(payment_payload)
         requirements_dict = _to_dict(payment_requirements)
 
+        headers = await self._get_auth_headers("verify")
         response = await self._http.post(
             f"{self._url}/v1/x402/verify",
+            headers=headers,
             json={
                 "paymentPayload": payload_dict,
                 "paymentRequirements": requirements_dict,
             },
         )
 
-        if response.status_code == 200:
-            data = response.json()
+        data = response.json()
+        if isinstance(data, dict) and "isValid" in data:
             return VerifyResponse(
                 is_valid=data.get("isValid", False),
                 payer=data.get("payer"),
                 invalid_reason=data.get("invalidReason"),
             )
-        return VerifyResponse(is_valid=False)
+        raise ValueError(
+            f"Gateway verify failed ({response.status_code}): {data}"
+        )
 
     async def settle(
         self,
@@ -144,21 +158,23 @@ class BatchFacilitatorClient:
             SettleResponse with transaction hash if successful
 
         Raises:
-            ValueError: If settlement fails
+            ValueError: If the API response is malformed or missing expected fields
         """
         payload_dict = _to_dict(payment_payload)
         requirements_dict = _to_dict(payment_requirements)
 
+        headers = await self._get_auth_headers("settle")
         response = await self._http.post(
             f"{self._url}/v1/x402/settle",
+            headers=headers,
             json={
                 "paymentPayload": payload_dict,
                 "paymentRequirements": requirements_dict,
             },
         )
 
-        if response.status_code == 200:
-            data = response.json()
+        data = response.json()
+        if isinstance(data, dict) and "success" in data:
             return SettleResponse(
                 success=data.get("success", True),
                 transaction=data.get("transaction"),
@@ -166,14 +182,9 @@ class BatchFacilitatorClient:
                 payer=data.get("payer"),
                 network=requirements_dict.get("network"),
             )
-
-        error_msg = response.text
-        try:
-            error_data = response.json()
-            error_msg = error_data.get("error", error_msg)
-        except Exception:
-            pass
-        raise ValueError(f"Settlement failed: {error_msg}")
+        raise ValueError(
+            f"Gateway settle failed ({response.status_code}): {data}"
+        )
 
     def get_supported(self) -> SupportedResponse:
         """
@@ -181,20 +192,24 @@ class BatchFacilitatorClient:
 
         Note: This method is sync (not async). x402's initialize() calls
         get_supported() synchronously during server startup, so the
-        FacilitatorClient protocol requires it to be sync. This is a
-        breaking change from the previous async version — callers that
-        used ``await client.get_supported()`` should remove the ``await``.
+        FacilitatorClient protocol requires it to be sync.
 
         Returns:
             SupportedResponse with kinds list
+
+        Raises:
+            ValueError: If the API returns a non-OK response
         """
         with httpx.Client(timeout=30.0) as client:
             response = client.get(f"{self._url}/v1/x402/supported")
 
-        if response.status_code == 200:
-            data = response.json()
-            return _parse_supported_response(data)
-        return SupportedResponse()
+        if not (200 <= response.status_code < 300):
+            error_text = response.text
+            raise ValueError(
+                f"Gateway getSupported failed ({response.status_code}): {error_text}"
+            )
+        data = response.json()
+        return _parse_supported_response(data)
 
     async def close(self):
         """Close the HTTP client."""
