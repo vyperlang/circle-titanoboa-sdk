@@ -24,7 +24,7 @@ Usage:
 
 import asyncio
 import os
-import time
+import warnings
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Dict, Generic, Optional, TypeVar
@@ -32,20 +32,12 @@ import httpx
 
 from circlekit.constants import (
     ChainConfig,
-    CIRCLE_BATCHING_NAME,
-    CIRCLE_BATCHING_VERSION,
-    USDC_DECIMALS,
     get_gateway_api_url,
 )
-import warnings
-
 from circlekit.boa_utils import (
     get_chain_config,
-    get_account_from_private_key,
     format_usdc,
     parse_usdc,
-    get_usdc_balance as _boa_get_usdc_balance,
-    get_gateway_balance as _boa_get_gateway_balance,
     get_withdrawal_delay as _boa_get_withdrawal_delay,
     get_withdrawal_block as _boa_get_withdrawal_block,
     get_block_number as _boa_get_block_number,
