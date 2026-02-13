@@ -1931,6 +1931,62 @@ class TestGatewayMiddleware:
             assert result["status"] == 402
             assert "settlement" in result["body"]["error"].lower()
 
+    @pytest.mark.asyncio
+    async def test_process_request_rejects_settle_success_false(self):
+        """process_request must return 402 when settle returns success=False."""
+        from circlekit.server import create_gateway_middleware
+        from circlekit.facilitator import VerifyResponse, SettleResponse
+        import base64, json
+
+        middleware = create_gateway_middleware(
+            seller_address="0x1234567890123456789012345678901234567890",
+        )
+
+        fake_header = base64.b64encode(json.dumps({
+            "payload": {"authorization": {"from": "0xabc", "value": "10000"}, "signature": "0x123"},
+            "accepted": {},
+        }).encode()).decode()
+
+        with patch.object(middleware._facilitator, 'verify', new_callable=AsyncMock) as mock_verify, \
+             patch.object(middleware._facilitator, 'settle', new_callable=AsyncMock) as mock_settle:
+            mock_verify.return_value = VerifyResponse(is_valid=True)
+            mock_settle.return_value = SettleResponse(success=False, error_reason="insufficient funds")
+
+            result = await middleware.process_request(
+                payment_header=fake_header,
+                path="/api/test",
+                price="$0.01",
+            )
+            assert isinstance(result, dict)
+            assert result["status"] == 402
+            assert result["body"]["error"] == "Payment settlement failed"
+            assert result["body"]["reason"] == "insufficient funds"
+
+    @pytest.mark.asyncio
+    async def test_settle_raises_on_success_false(self):
+        """settle() must raise ValueError when settle returns success=False."""
+        from circlekit.server import create_gateway_middleware
+        from circlekit.facilitator import SettleResponse
+        import base64, json
+
+        middleware = create_gateway_middleware(
+            seller_address="0x1234567890123456789012345678901234567890",
+        )
+
+        fake_header = base64.b64encode(json.dumps({
+            "payload": {"authorization": {"from": "0xabc", "value": "10000"}, "signature": "0x123"},
+            "accepted": {},
+        }).encode()).decode()
+
+        with patch.object(middleware._facilitator, 'settle', new_callable=AsyncMock) as mock_settle:
+            mock_settle.return_value = SettleResponse(success=False, error_reason="bad")
+
+            with pytest.raises(ValueError, match="Payment settlement failed: bad"):
+                await middleware.settle(
+                    payment_header=fake_header,
+                    price="$0.01",
+                )
+
 
 # ============================================================================
 # TEST: boa_utils.py transaction helpers

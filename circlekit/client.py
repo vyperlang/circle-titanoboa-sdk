@@ -51,7 +51,6 @@ from circlekit.x402 import (
     create_payment_header,
     PaymentPayload,
     PaymentRequirements,
-    X402Response,
     PAYMENT_SIGNATURE_HEADER,
 )
 

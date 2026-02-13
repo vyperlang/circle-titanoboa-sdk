@@ -191,6 +191,11 @@ class GatewayMiddleware:
             payment_requirements=server_requirements,
         )
 
+        if not settle_result.success:
+            raise ValueError(
+                f"Payment settlement failed: {settle_result.error_reason}"
+            )
+
         payload = header_data.get("payload", header_data)
         authorization = payload.get("authorization", {})
         payer = authorization.get("from", "")
@@ -198,7 +203,7 @@ class GatewayMiddleware:
 
         response_headers = {
             PAYMENT_RESPONSE_HEADER: encode_payment_response({
-                "success": True,
+                "success": settle_result.success,
                 "transaction": settle_result.transaction or "",
                 "payer": payer,
                 "network": network,
@@ -277,6 +282,12 @@ class GatewayMiddleware:
                 "body": {"error": f"Payment settlement failed: {e}"},
             }
 
+        if not settle_result.success:
+            return {
+                "status": 402,
+                "body": {"error": "Payment settlement failed", "reason": settle_result.error_reason},
+            }
+
         amount = parse_usdc(price)
         payload = header_data.get("payload", header_data)
         authorization = payload.get("authorization", {})
@@ -285,7 +296,7 @@ class GatewayMiddleware:
 
         response_headers = {
             PAYMENT_RESPONSE_HEADER: encode_payment_response({
-                "success": True,
+                "success": settle_result.success,
                 "transaction": settle_result.transaction or "",
                 "payer": payer,
                 "network": network,

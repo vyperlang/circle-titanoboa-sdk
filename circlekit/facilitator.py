@@ -7,7 +7,9 @@ x402ResourceServer without any adapter.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
+
+import asyncio
 
 import httpx
 
@@ -87,7 +89,7 @@ class BatchFacilitatorClient:
     def __init__(
         self,
         url: Optional[str] = None,
-        create_auth_headers: Optional[Any] = None,
+        create_auth_headers: Optional[Callable[[], Awaitable[Dict[str, Dict[str, str]]]]] = None,
     ):
         self._url = (url or GATEWAY_API_TESTNET_URL).rstrip("/")
         self._http = httpx.AsyncClient(timeout=30.0)
@@ -98,6 +100,25 @@ class BatchFacilitatorClient:
         if self._create_auth_headers is None:
             return {}
         auth = await self._create_auth_headers()
+        return auth.get(endpoint, {})
+
+    def _get_auth_headers_sync(self, endpoint: str) -> Dict[str, str]:
+        """Get auth headers synchronously (for sync methods like get_supported).
+
+        When called from an async context (running event loop), delegates to
+        a background thread to avoid ``asyncio.run()`` conflicts.
+        """
+        if self._create_auth_headers is None:
+            return {}
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            auth = asyncio.run(self._create_auth_headers())
+        else:
+            # Inside an async context — run in a thread to avoid nested loop.
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                auth = pool.submit(asyncio.run, self._create_auth_headers()).result()
         return auth.get(endpoint, {})
 
     async def verify(
@@ -176,7 +197,7 @@ class BatchFacilitatorClient:
         data = response.json()
         if isinstance(data, dict) and "success" in data:
             return SettleResponse(
-                success=data.get("success", True),
+                success=data["success"],
                 transaction=data.get("transaction"),
                 error_reason=data.get("errorReason"),
                 payer=data.get("payer"),
@@ -200,8 +221,9 @@ class BatchFacilitatorClient:
         Raises:
             ValueError: If the API returns a non-OK response
         """
+        headers = self._get_auth_headers_sync("supported")
         with httpx.Client(timeout=30.0) as client:
-            response = client.get(f"{self._url}/v1/x402/supported")
+            response = client.get(f"{self._url}/v1/x402/supported", headers=headers)
 
         if not (200 <= response.status_code < 300):
             error_text = response.text

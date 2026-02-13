@@ -260,12 +260,13 @@ class TestGetSupported:
         assert result.extensions == ["bazaar"]
         assert result.signers == {"eip155": ["0xSIGNER"]}
 
-    def test_get_supported_empty_on_failure(self):
+    def test_get_supported_raises_on_failure(self):
         from circlekit.facilitator import BatchFacilitatorClient
 
         client = BatchFacilitatorClient()
         mock_response = MagicMock()
         mock_response.status_code = 500
+        mock_response.text = "Internal Server Error"
 
         with patch("httpx.Client") as MockClient:
             mock_client_instance = MagicMock()
@@ -274,9 +275,34 @@ class TestGetSupported:
             mock_client_instance.get.return_value = mock_response
             MockClient.return_value = mock_client_instance
 
-            result = client.get_supported()
+            with pytest.raises(ValueError, match="Gateway getSupported failed"):
+                client.get_supported()
 
-        assert len(result.kinds) == 0
+    def test_get_supported_forwards_auth_headers(self):
+        """get_supported must forward auth headers from create_auth_headers."""
+        from circlekit.facilitator import BatchFacilitatorClient
+
+        async def fake_auth():
+            return {"supported": {"Authorization": "Bearer tok123"}}
+
+        client = BatchFacilitatorClient(create_auth_headers=fake_auth)
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"eip155:8453": ["exact"]}
+
+        with patch("httpx.Client") as MockClient:
+            mock_client_instance = MagicMock()
+            mock_client_instance.__enter__ = MagicMock(return_value=mock_client_instance)
+            mock_client_instance.__exit__ = MagicMock(return_value=False)
+            mock_client_instance.get.return_value = mock_response
+            MockClient.return_value = mock_client_instance
+
+            client.get_supported()
+
+            mock_client_instance.get.assert_called_once_with(
+                f"{client._url}/v1/x402/supported",
+                headers={"Authorization": "Bearer tok123"},
+            )
 
     def test_get_supported_is_sync(self):
         """get_supported must be sync — x402's initialize() calls it synchronously."""
