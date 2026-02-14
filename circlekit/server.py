@@ -23,35 +23,36 @@ Usage:
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any
 
+from circlekit.boa_utils import parse_usdc
 from circlekit.constants import (
     CHAIN_CONFIGS,
     CIRCLE_BATCHING_NAME,
     CIRCLE_BATCHING_SCHEME,
     CIRCLE_BATCHING_VERSION,
-    ChainConfig,
     DEFAULT_MAX_TIMEOUT_SECONDS,
     X402_VERSION,
+    ChainConfig,
     get_gateway_api_url,
 )
-from circlekit.boa_utils import parse_usdc
 from circlekit.facilitator import BatchFacilitatorClient, SettleResponse, VerifyResponse
 from circlekit.x402 import (
+    PAYMENT_REQUIRED_HEADER,
+    PAYMENT_RESPONSE_HEADER,
+    PaymentInfo,
     decode_payment_header,
     encode_payment_required,
     encode_payment_response,
-    PaymentInfo,
-    PAYMENT_REQUIRED_HEADER,
-    PAYMENT_RESPONSE_HEADER,
 )
 
 
 @dataclass
 class GatewayMiddlewareConfig:
     """Configuration for Gateway middleware."""
+
     seller_address: str
-    networks: List[str] = field(default_factory=list)
+    networks: list[str] = field(default_factory=list)
     description: str = "Paid resource"
     chain: str = "arcTestnet"
 
@@ -73,14 +74,13 @@ class GatewayMiddleware:
         # Build accepted chains map: "eip155:{chain_id}" -> ChainConfig
         # If config.networks is non-empty, resolve each to ChainConfig;
         # otherwise, default to just the primary chain.
-        self._accepted_chains: Dict[str, ChainConfig] = {}
+        self._accepted_chains: dict[str, ChainConfig] = {}
         if config.networks:
             for net_name in config.networks:
                 cc = CHAIN_CONFIGS.get(net_name)
                 if cc is None:
                     raise ValueError(
-                        f"Unknown network: {net_name}. "
-                        f"Supported: {', '.join(CHAIN_CONFIGS.keys())}"
+                        f"Unknown network: {net_name}. Supported: {', '.join(CHAIN_CONFIGS.keys())}"
                     )
                 self._accepted_chains[f"eip155:{cc.chain_id}"] = cc
         else:
@@ -90,7 +90,7 @@ class GatewayMiddleware:
         self,
         payment_header: str,
         price: str,
-    ) -> Tuple[Dict[str, Any], Dict[str, Any], str]:
+    ) -> tuple[dict[str, Any], dict[str, Any], str]:
         """Decode a payment header and build server-side requirements.
 
         Returns:
@@ -131,7 +131,7 @@ class GatewayMiddleware:
 
         return header_data, server_requirements, network
 
-    def require(self, price: str, path: str) -> Dict[str, Any]:
+    def require(self, price: str, path: str) -> dict[str, Any]:
         """
         Build a 402 Payment Required response.
 
@@ -165,7 +165,8 @@ class GatewayMiddleware:
             ValueError: On malformed header or unsupported network.
         """
         header_data, server_requirements, _network = self._decode_and_resolve(
-            payment_header, price,
+            payment_header,
+            price,
         )
         return await self._facilitator.verify(
             payload=header_data,
@@ -174,7 +175,7 @@ class GatewayMiddleware:
 
     def _build_payment_info(
         self,
-        header_data: Dict[str, Any],
+        header_data: dict[str, Any],
         settle_result: SettleResponse,
         network: str,
         price: str,
@@ -187,12 +188,14 @@ class GatewayMiddleware:
         value = str(authorization.get("value", amount))
 
         response_headers = {
-            PAYMENT_RESPONSE_HEADER: encode_payment_response({
-                "success": settle_result.success,
-                "transaction": settle_result.transaction or "",
-                "payer": payer,
-                "network": network,
-            })
+            PAYMENT_RESPONSE_HEADER: encode_payment_response(
+                {
+                    "success": settle_result.success,
+                    "transaction": settle_result.transaction or "",
+                    "payer": payer,
+                    "network": network,
+                }
+            )
         }
 
         return PaymentInfo(
@@ -219,7 +222,8 @@ class GatewayMiddleware:
             ValueError: On malformed header, unsupported network, or settlement failure.
         """
         header_data, server_requirements, network = self._decode_and_resolve(
-            payment_header, price,
+            payment_header,
+            price,
         )
 
         settle_result = await self._facilitator.settle(
@@ -228,18 +232,16 @@ class GatewayMiddleware:
         )
 
         if not settle_result.success:
-            raise ValueError(
-                f"Payment settlement failed: {settle_result.error_reason}"
-            )
+            raise ValueError(f"Payment settlement failed: {settle_result.error_reason}")
 
         return self._build_payment_info(header_data, settle_result, network, price)
 
     async def process_request(
         self,
-        payment_header: Optional[str],
+        payment_header: str | None,
         path: str,
         price: str,
-    ) -> Union[Dict[str, Any], PaymentInfo]:
+    ) -> dict[str, Any] | PaymentInfo:
         """
         Process a request that may require payment.
 
@@ -259,7 +261,8 @@ class GatewayMiddleware:
 
         try:
             header_data, server_requirements, network = self._decode_and_resolve(
-                payment_header, price,
+                payment_header,
+                price,
             )
         except Exception as e:
             return {
@@ -300,28 +303,33 @@ class GatewayMiddleware:
         if not settle_result.success:
             return {
                 "status": 402,
-                "body": {"error": "Payment settlement failed", "reason": settle_result.error_reason},
+                "body": {
+                    "error": "Payment settlement failed",
+                    "reason": settle_result.error_reason,
+                },
             }
 
         return self._build_payment_info(header_data, settle_result, network, price)
 
-    def _build_402_response(self, amount: str, path: str) -> Dict[str, Any]:
+    def _build_402_response(self, amount: str, path: str) -> dict[str, Any]:
         """Build a 402 response body with one accepts entry per accepted network."""
         accepts = []
         for network_id, cc in self._accepted_chains.items():
-            accepts.append({
-                "scheme": CIRCLE_BATCHING_SCHEME,
-                "network": network_id,
-                "asset": cc.usdc_address,
-                "amount": amount,
-                "payTo": self._config.seller_address,
-                "maxTimeoutSeconds": DEFAULT_MAX_TIMEOUT_SECONDS,
-                "extra": {
-                    "name": CIRCLE_BATCHING_NAME,
-                    "version": CIRCLE_BATCHING_VERSION,
-                    "verifyingContract": cc.gateway_address,
-                },
-            })
+            accepts.append(
+                {
+                    "scheme": CIRCLE_BATCHING_SCHEME,
+                    "network": network_id,
+                    "asset": cc.usdc_address,
+                    "amount": amount,
+                    "payTo": self._config.seller_address,
+                    "maxTimeoutSeconds": DEFAULT_MAX_TIMEOUT_SECONDS,
+                    "extra": {
+                        "name": CIRCLE_BATCHING_NAME,
+                        "version": CIRCLE_BATCHING_VERSION,
+                        "verifyingContract": cc.gateway_address,
+                    },
+                }
+            )
 
         return {
             "x402Version": X402_VERSION,
@@ -347,7 +355,7 @@ class GatewayMiddleware:
 
 def create_gateway_middleware(
     seller_address: str,
-    networks: Optional[List[str]] = None,
+    networks: list[str] | None = None,
     description: str = "Paid resource",
     chain: str = "arcTestnet",
 ) -> GatewayMiddleware:

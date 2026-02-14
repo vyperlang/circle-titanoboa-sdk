@@ -3,8 +3,6 @@ Constants for x402 batching via Circle Gateway.
 """
 
 from dataclasses import dataclass
-from typing import Dict, Optional
-
 
 # Protocol constants
 CIRCLE_BATCHING_NAME = "GatewayWalletBatched"
@@ -38,13 +36,13 @@ class ChainConfig:
     gateway_address: str
     gateway_minter: str
     gateway_domain: int
-    explorer_url: Optional[str] = None
+    explorer_url: str | None = None
     is_testnet: bool = True
 
 
 # Chain configurations
 # gateway_domain values are Circle's internal domain IDs, NOT chain IDs
-CHAIN_CONFIGS: Dict[str, ChainConfig] = {
+CHAIN_CONFIGS: dict[str, ChainConfig] = {
     # ============ TESTNETS ============
     # NOTE: On Arc, USDC is the NATIVE gas token (like ETH on Ethereum).
     # However, there's a sentinel contract at 0x3600... that wraps native USDC
@@ -137,7 +135,6 @@ CHAIN_CONFIGS: Dict[str, ChainConfig] = {
         explorer_url="https://seistream.app",
         is_testnet=True,
     ),
-
     # ============ MAINNETS ============
     "ethereum": ChainConfig(
         chain_id=1,
@@ -264,7 +261,7 @@ CHAIN_CONFIGS: Dict[str, ChainConfig] = {
 
 
 # Chain name aliases
-CHAIN_ALIASES: Dict[str, str] = {
+CHAIN_ALIASES: dict[str, str] = {
     "sepolia": "ethereumSepolia",
     "mainnet": "ethereum",
 }
@@ -300,7 +297,7 @@ def get_chain_config(chain: str) -> ChainConfig:
     return CHAIN_CONFIGS[resolved]
 
 
-def get_chain_by_id(chain_id: int) -> Optional[ChainConfig]:
+def get_chain_by_id(chain_id: int) -> ChainConfig | None:
     """
     Get chain configuration by chain ID.
 

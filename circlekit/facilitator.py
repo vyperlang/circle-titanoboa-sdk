@@ -6,17 +6,17 @@ If the x402 package is installed, this client can be used directly with
 x402ResourceServer without any adapter.
 """
 
-from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Dict, List, Optional
-
 import asyncio
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
+from typing import Any
 
 import httpx
 
 from circlekit.constants import GATEWAY_API_TESTNET_URL
 
 
-def _to_dict(obj: Any) -> Dict[str, Any]:
+def _to_dict(obj: Any) -> dict[str, Any]:
     """Normalize a payload to dict.
 
     Accepts plain dicts, Pydantic models (.model_dump), or any mapping.
@@ -24,7 +24,7 @@ def _to_dict(obj: Any) -> Dict[str, Any]:
     if isinstance(obj, dict):
         return obj
     if hasattr(obj, "model_dump"):
-        result: Dict[str, Any] = obj.model_dump(by_alias=True)
+        result: dict[str, Any] = obj.model_dump(by_alias=True)
         return result
     return dict(obj)  # type: ignore[return-value]
 
@@ -32,28 +32,31 @@ def _to_dict(obj: Any) -> Dict[str, Any]:
 @dataclass
 class VerifyResponse:
     """Response from the verify endpoint."""
+
     is_valid: bool
-    payer: Optional[str] = None
-    invalid_reason: Optional[str] = None
+    payer: str | None = None
+    invalid_reason: str | None = None
 
 
 @dataclass
 class SettleResponse:
     """Response from the settle endpoint."""
+
     success: bool = False
-    transaction: Optional[str] = None
-    error_reason: Optional[str] = None
-    payer: Optional[str] = None
-    network: Optional[str] = None
+    transaction: str | None = None
+    error_reason: str | None = None
+    payer: str | None = None
+    network: str | None = None
 
 
 @dataclass
 class SupportedKind:
     """A supported payment kind (network + scheme)."""
+
     x402_version: int
     scheme: str
     network: str
-    extra: Optional[Dict[str, Any]] = None
+    extra: dict[str, Any] | None = None
 
 
 @dataclass
@@ -62,9 +65,10 @@ class SupportedResponse:
 
     Compatible with x402's SupportedResponse (has .kinds attribute).
     """
-    kinds: List[SupportedKind] = field(default_factory=list)
-    extensions: List[str] = field(default_factory=list)
-    signers: Dict[str, List[str]] = field(default_factory=dict)
+
+    kinds: list[SupportedKind] = field(default_factory=list)
+    extensions: list[str] = field(default_factory=list)
+    signers: dict[str, list[str]] = field(default_factory=dict)
 
 
 class BatchFacilitatorClient:
@@ -89,21 +93,21 @@ class BatchFacilitatorClient:
 
     def __init__(
         self,
-        url: Optional[str] = None,
-        create_auth_headers: Optional[Callable[[], Awaitable[Dict[str, Dict[str, str]]]]] = None,
+        url: str | None = None,
+        create_auth_headers: Callable[[], Awaitable[dict[str, dict[str, str]]]] | None = None,
     ):
         self._url = (url or GATEWAY_API_TESTNET_URL).rstrip("/")
         self._http = httpx.AsyncClient(timeout=30.0)
         self._create_auth_headers = create_auth_headers
 
-    async def _get_auth_headers(self, endpoint: str) -> Dict[str, str]:
+    async def _get_auth_headers(self, endpoint: str) -> dict[str, str]:
         """Get auth headers for a specific endpoint."""
         if self._create_auth_headers is None:
             return {}
         auth = await self._create_auth_headers()
         return auth.get(endpoint, {})
 
-    def _get_auth_headers_sync(self, endpoint: str) -> Dict[str, str]:
+    def _get_auth_headers_sync(self, endpoint: str) -> dict[str, str]:
         """Get auth headers synchronously (for sync methods like get_supported).
 
         When called from an async context (running event loop), delegates to
@@ -114,18 +118,18 @@ class BatchFacilitatorClient:
 
         create_headers = self._create_auth_headers
 
-        async def _await_headers() -> Dict[str, Dict[str, str]]:
+        async def _await_headers() -> dict[str, dict[str, str]]:
             return await create_headers()
 
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            auth: Dict[str, Dict[str, str]] = asyncio.run(_await_headers())
+            auth: dict[str, dict[str, str]] = asyncio.run(_await_headers())
         else:
             # Inside an async context — run in a thread to avoid nested loop.
             from concurrent.futures import ThreadPoolExecutor
 
-            def _run() -> Dict[str, Dict[str, str]]:
+            def _run() -> dict[str, dict[str, str]]:
                 return asyncio.run(_await_headers())
 
             with ThreadPoolExecutor(max_workers=1) as pool:
@@ -170,9 +174,7 @@ class BatchFacilitatorClient:
                 payer=data.get("payer"),
                 invalid_reason=data.get("invalidReason"),
             )
-        raise ValueError(
-            f"Gateway verify failed ({response.status_code}): {data}"
-        )
+        raise ValueError(f"Gateway verify failed ({response.status_code}): {data}")
 
     async def settle(
         self,
@@ -214,9 +216,7 @@ class BatchFacilitatorClient:
                 payer=data.get("payer"),
                 network=requirements_dict.get("network"),
             )
-        raise ValueError(
-            f"Gateway settle failed ({response.status_code}): {data}"
-        )
+        raise ValueError(f"Gateway settle failed ({response.status_code}): {data}")
 
     def get_supported(self) -> SupportedResponse:
         """
@@ -238,9 +238,7 @@ class BatchFacilitatorClient:
 
         if not (200 <= response.status_code < 300):
             error_text = response.text
-            raise ValueError(
-                f"Gateway getSupported failed ({response.status_code}): {error_text}"
-            )
+            raise ValueError(f"Gateway getSupported failed ({response.status_code}): {error_text}")
         data = response.json()
         return _parse_supported_response(data)
 
@@ -271,12 +269,14 @@ def _parse_supported_response(data: Any) -> SupportedResponse:
     if isinstance(data, dict) and "kinds" in data:
         kinds = []
         for kind_data in data["kinds"]:
-            kinds.append(SupportedKind(
-                x402_version=kind_data.get("x402Version", 2),
-                scheme=kind_data.get("scheme", "exact"),
-                network=kind_data.get("network", ""),
-                extra=kind_data.get("extra"),
-            ))
+            kinds.append(
+                SupportedKind(
+                    x402_version=kind_data.get("x402Version", 2),
+                    scheme=kind_data.get("scheme", "exact"),
+                    network=kind_data.get("network", ""),
+                    extra=kind_data.get("extra"),
+                )
+            )
         return SupportedResponse(
             kinds=kinds,
             extensions=data.get("extensions", []),
@@ -289,11 +289,13 @@ def _parse_supported_response(data: Any) -> SupportedResponse:
         for network, schemes in data.items():
             if isinstance(schemes, list):
                 for scheme in schemes:
-                    kinds.append(SupportedKind(
-                        x402_version=2,
-                        scheme=scheme,
-                        network=network,
-                    ))
+                    kinds.append(
+                        SupportedKind(
+                            x402_version=2,
+                            scheme=scheme,
+                            network=network,
+                        )
+                    )
         return SupportedResponse(kinds=kinds)
 
     return SupportedResponse()

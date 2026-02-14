@@ -19,9 +19,9 @@ import sys
 from datetime import datetime
 from functools import wraps
 
+import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-import uvicorn
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -47,6 +47,7 @@ gateway = create_gateway_middleware(
 
 def require_payment(price):
     """FastAPI adapter: wraps gateway.process_request into a decorator."""
+
     def decorator(func):
         @wraps(func)
         async def wrapper(request: Request, *args, **kwargs):
@@ -63,11 +64,13 @@ def require_payment(price):
             kwargs["payment"] = result
             response = await func(request, *args, **kwargs)
             # Attach PAYMENT-RESPONSE header if present
-            if hasattr(result, 'response_headers') and result.response_headers:
+            if hasattr(result, "response_headers") and result.response_headers:
                 for k, v in result.response_headers.items():
                     response.headers[k] = v
             return response
+
         return wrapper
+
     return decorator
 
 
@@ -84,11 +87,17 @@ async def health_check():
 @app.get("/api/analyze")
 @require_payment("$0.01")
 async def analyze(request: Request, payment: PaymentInfo = None):
-    return JSONResponse({
-        "success": True,
-        "result": {"summary": "Analysis complete.", "confidence": 0.92},
-        "payment": {"amount": payment.amount, "payer": payment.payer, "transaction": payment.transaction},
-    })
+    return JSONResponse(
+        {
+            "success": True,
+            "result": {"summary": "Analysis complete.", "confidence": 0.92},
+            "payment": {
+                "amount": payment.amount,
+                "payer": payment.payer,
+                "transaction": payment.transaction,
+            },
+        }
+    )
 
 
 @app.post("/api/generate")
@@ -96,11 +105,20 @@ async def analyze(request: Request, payment: PaymentInfo = None):
 async def generate(request: Request, payment: PaymentInfo = None):
     data = await request.json()
     prompt = data.get("prompt", "default prompt")
-    return JSONResponse({
-        "success": True,
-        "result": {"content": f"Generated content for: {prompt}", "generatedAt": datetime.now().isoformat()},
-        "payment": {"amount": payment.amount, "payer": payment.payer, "transaction": payment.transaction},
-    })
+    return JSONResponse(
+        {
+            "success": True,
+            "result": {
+                "content": f"Generated content for: {prompt}",
+                "generatedAt": datetime.now().isoformat(),
+            },
+            "payment": {
+                "amount": payment.amount,
+                "payer": payment.payer,
+                "transaction": payment.transaction,
+            },
+        }
+    )
 
 
 if __name__ == "__main__":

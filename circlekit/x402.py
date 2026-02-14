@@ -18,17 +18,17 @@ import json
 import time
 import warnings
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
+from circlekit.boa_utils import generate_nonce
 from circlekit.constants import (
     CIRCLE_BATCHING_NAME,
-    CIRCLE_BATCHING_VERSION,
     CIRCLE_BATCHING_SCHEME,
+    CIRCLE_BATCHING_VERSION,
     DEFAULT_MAX_TIMEOUT_SECONDS,
-    X402_VERSION,
     USDC_DECIMALS,
+    X402_VERSION,
 )
-from circlekit.boa_utils import generate_nonce
 from circlekit.signer import Signer
 
 # x402 v2 header names
@@ -51,13 +51,14 @@ class PaymentRequirements:
     - max_timeout_seconds: Maximum signature validity
     - extra: Additional data (verifyingContract, name, version)
     """
+
     scheme: str
     network: str
     asset: str
     amount: str
     pay_to: str
     max_timeout_seconds: int = DEFAULT_MAX_TIMEOUT_SECONDS
-    extra: Dict[str, Any] = field(default_factory=dict)
+    extra: dict[str, Any] = field(default_factory=dict)
 
     @property
     def is_gateway_batched(self) -> bool:
@@ -68,7 +69,7 @@ class PaymentRequirements:
         )
 
     @property
-    def verifying_contract(self) -> Optional[str]:
+    def verifying_contract(self) -> str | None:
         """Get the Gateway Wallet contract address."""
         vc = self.extra.get("verifyingContract")
         if isinstance(vc, str):
@@ -95,11 +96,12 @@ class X402Response:
 
     Contains the x402 version and list of accepted payment methods.
     """
-    x402_version: int
-    resource: Dict[str, Any]
-    accepts: List[PaymentRequirements]
 
-    def get_gateway_option(self) -> Optional[PaymentRequirements]:
+    x402_version: int
+    resource: dict[str, Any]
+    accepts: list[PaymentRequirements]
+
+    def get_gateway_option(self) -> PaymentRequirements | None:
         """Get the Circle Gateway batched payment option if available."""
         for option in self.accepts:
             if option.is_gateway_batched:
@@ -127,11 +129,12 @@ class PaymentPayload:
 
     Structure: {x402Version, payload: {authorization, signature}, resource, accepted}
     """
+
     x402_version: int
     signature: str
-    authorization: Dict[str, Any]
+    authorization: dict[str, Any]
 
-    def to_header(self, accepted: PaymentRequirements, resource: Dict[str, Any]) -> str:
+    def to_header(self, accepted: PaymentRequirements, resource: dict[str, Any]) -> str:
         """
         Encode as base64 for Payment-Signature header.
 
@@ -164,12 +167,13 @@ class PaymentInfo:
 
     Available in server handlers after successful payment.
     """
+
     verified: bool
     payer: str
     amount: str
     network: str
-    transaction: Optional[str] = None
-    response_headers: Dict[str, str] = field(default_factory=dict)
+    transaction: str | None = None
+    response_headers: dict[str, str] = field(default_factory=dict)
 
     @property
     def amount_formatted(self) -> str:
@@ -186,7 +190,7 @@ class PaymentInfo:
         return f"{int(self.amount) / 10**USDC_DECIMALS:.6f}"
 
 
-def _parse_x402_dict(data: Dict) -> X402Response:
+def _parse_x402_dict(data: dict) -> X402Response:
     """
     Parse a dict into an X402Response.
 
@@ -226,7 +230,7 @@ def _parse_x402_dict(data: Dict) -> X402Response:
     )
 
 
-def parse_402_response(response_body: Union[str, bytes, Dict]) -> X402Response:
+def parse_402_response(response_body: str | bytes | dict) -> X402Response:
     """
     Parse a 402 Payment Required response body.
 
@@ -241,17 +245,14 @@ def parse_402_response(response_body: Union[str, bytes, Dict]) -> X402Response:
     """
     if isinstance(response_body, bytes):
         response_body = response_body.decode()
-    if isinstance(response_body, str):
-        data = json.loads(response_body)
-    else:
-        data = response_body
+    data = json.loads(response_body) if isinstance(response_body, str) else response_body
 
     return _parse_x402_dict(data)
 
 
 def get_payment_required(
-    header: Optional[str],
-    body: Union[str, bytes, Dict, None] = None,
+    header: str | None,
+    body: str | bytes | dict | None = None,
 ) -> X402Response:
     """
     Extract payment requirements from a 402 response.
@@ -277,18 +278,17 @@ def get_payment_required(
     if body is not None:
         if isinstance(body, bytes):
             body = body.decode()
-        if isinstance(body, str):
-            data = json.loads(body)
-        else:
-            data = body
+        data = json.loads(body) if isinstance(body, str) else body
 
         if isinstance(data, dict) and data.get("x402Version") == 1:
             return _parse_x402_dict(data)
 
-    raise ValueError("Invalid payment required response: no PAYMENT-REQUIRED header and body is not a valid v1 x402 response")
+    raise ValueError(
+        "Invalid payment required response: no PAYMENT-REQUIRED header and body is not a valid v1 x402 response"
+    )
 
 
-def encode_payment_required(data: Dict) -> str:
+def encode_payment_required(data: dict) -> str:
     """
     Encode payment requirements as a base64 string for the PAYMENT-REQUIRED header.
 
@@ -319,7 +319,7 @@ def decode_payment_required(header: str) -> X402Response:
     return _parse_x402_dict(data)
 
 
-def encode_payment_response(settle_info: Dict) -> str:
+def encode_payment_response(settle_info: dict) -> str:
     """
     Encode settlement info as a base64 string for the PAYMENT-RESPONSE header.
 
@@ -332,7 +332,7 @@ def encode_payment_response(settle_info: Dict) -> str:
     return base64.b64encode(json.dumps(settle_info).encode()).decode()
 
 
-def decode_payment_response(header: str) -> Dict[str, Any]:
+def decode_payment_response(header: str) -> dict[str, Any]:
     """
     Decode a PAYMENT-RESPONSE header value.
 
@@ -343,7 +343,7 @@ def decode_payment_response(header: str) -> Dict[str, Any]:
         Decoded settlement receipt dict
     """
     decoded = base64.b64decode(header).decode()
-    result: Dict[str, Any] = json.loads(decoded)
+    result: dict[str, Any] = json.loads(decoded)
     return result
 
 
@@ -457,7 +457,7 @@ def create_payment_payload(
 def create_payment_header(
     signer: Signer,
     requirements: PaymentRequirements,
-    resource: Optional[Dict[str, Any]] = None,
+    resource: dict[str, Any] | None = None,
     x402_version: int = X402_VERSION,
 ) -> str:
     """
@@ -478,7 +478,7 @@ def create_payment_header(
     return payload.to_header(requirements, resource or {})
 
 
-def decode_payment_header(header: str) -> Dict[str, Any]:
+def decode_payment_header(header: str) -> dict[str, Any]:
     """
     Decode a Payment-Signature header value.
 
@@ -489,11 +489,11 @@ def decode_payment_header(header: str) -> Dict[str, Any]:
         Decoded payload dict
     """
     decoded = base64.b64decode(header).decode()
-    result: Dict[str, Any] = json.loads(decoded)
+    result: dict[str, Any] = json.loads(decoded)
     return result
 
 
-def is_batch_payment(requirements: Union[Dict, PaymentRequirements]) -> bool:
+def is_batch_payment(requirements: dict | PaymentRequirements) -> bool:
     """
     Check if payment requirements are for Gateway batching.
 
@@ -515,7 +515,7 @@ def is_batch_payment(requirements: Union[Dict, PaymentRequirements]) -> bool:
     )
 
 
-def get_verifying_contract(requirements: Union[Dict, PaymentRequirements]) -> Optional[str]:
+def get_verifying_contract(requirements: dict | PaymentRequirements) -> str | None:
     """
     Extract the GatewayWallet contract address from payment requirements.
 
@@ -544,7 +544,7 @@ def build_402_response(
     usdc_address: str,
     gateway_address: str,
     description: str = "Paid resource",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Build a 402 response body for a seller.
 

@@ -4,19 +4,23 @@ Integration tests for circlekit - tests the process_request() adapter pattern.
 These tests verify the middleware flow works correctly using mocked facilitator.
 """
 
-import pytest
-import json
 import base64
-from unittest.mock import patch, AsyncMock
+import json
+from unittest.mock import AsyncMock, patch
 
+import pytest
+from circlekit.facilitator import SettleResponse, VerifyResponse
 from circlekit.server import create_gateway_middleware
-from circlekit.x402 import (
-    create_payment_header, PaymentRequirements, PaymentInfo,
-    decode_payment_required, decode_payment_response,
-    PAYMENT_REQUIRED_HEADER, PAYMENT_RESPONSE_HEADER,
-)
 from circlekit.signer import PrivateKeySigner
-from circlekit.facilitator import VerifyResponse, SettleResponse
+from circlekit.x402 import (
+    PAYMENT_REQUIRED_HEADER,
+    PAYMENT_RESPONSE_HEADER,
+    PaymentInfo,
+    PaymentRequirements,
+    create_payment_header,
+    decode_payment_required,
+    decode_payment_response,
+)
 
 
 class TestIntegration:
@@ -81,15 +85,12 @@ class TestIntegration:
         header = create_payment_header(signer, requirements, resource=resource)
 
         # Mock the facilitator to approve
-        with patch.object(
-            gateway._facilitator, "verify", new_callable=AsyncMock
-        ) as mock_verify, patch.object(
-            gateway._facilitator, "settle", new_callable=AsyncMock
-        ) as mock_settle:
+        with (
+            patch.object(gateway._facilitator, "verify", new_callable=AsyncMock) as mock_verify,
+            patch.object(gateway._facilitator, "settle", new_callable=AsyncMock) as mock_settle,
+        ):
             mock_verify.return_value = VerifyResponse(is_valid=True)
-            mock_settle.return_value = SettleResponse(
-                success=True, transaction="0xtx123"
-            )
+            mock_settle.return_value = SettleResponse(success=True, transaction="0xtx123")
 
             result = await gateway.process_request(
                 payment_header=header,
@@ -150,9 +151,7 @@ class TestIntegration:
             ).encode()
         ).decode()
 
-        with patch.object(
-            gateway._facilitator, "verify", new_callable=AsyncMock
-        ) as mock_verify:
+        with patch.object(gateway._facilitator, "verify", new_callable=AsyncMock) as mock_verify:
             mock_verify.return_value = VerifyResponse(is_valid=False)
 
             result = await gateway.process_request(
@@ -165,7 +164,6 @@ class TestIntegration:
         assert result["status"] == 402
         assert "invalid" in result["body"]["error"].lower()
         await gateway.close()
-
 
     @pytest.mark.asyncio
     async def test_multi_network_payment_on_accepted_chain(self):
@@ -195,15 +193,12 @@ class TestIntegration:
         resource = {"url": "/api/paid", "description": "Paid resource"}
         header = create_payment_header(signer, requirements, resource=resource)
 
-        with patch.object(
-            gateway._facilitator, "verify", new_callable=AsyncMock
-        ) as mock_verify, patch.object(
-            gateway._facilitator, "settle", new_callable=AsyncMock
-        ) as mock_settle:
+        with (
+            patch.object(gateway._facilitator, "verify", new_callable=AsyncMock) as mock_verify,
+            patch.object(gateway._facilitator, "settle", new_callable=AsyncMock) as mock_settle,
+        ):
             mock_verify.return_value = VerifyResponse(is_valid=True)
-            mock_settle.return_value = SettleResponse(
-                success=True, transaction="0xtx_base"
-            )
+            mock_settle.return_value = SettleResponse(success=True, transaction="0xtx_base")
 
             result = await gateway.process_request(
                 payment_header=header,

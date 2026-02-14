@@ -9,10 +9,10 @@ interactions. It handles:
 - ABI encoding/decoding
 """
 
-from decimal import Decimal, ROUND_HALF_UP
-from typing import Any, Optional, Tuple
-import os
 import json
+import os
+from decimal import ROUND_HALF_UP, Decimal
+from typing import Any
 
 import boa
 from eth_account import Account
@@ -25,7 +25,7 @@ def get_rpc_url(chain: str) -> str:
     return get_chain_config(chain).rpc_url
 
 
-def setup_boa_env(chain: str, rpc_url: Optional[str] = None) -> None:
+def setup_boa_env(chain: str, rpc_url: str | None = None) -> None:
     """
     Configure titanoboa environment for a specific chain.
 
@@ -51,7 +51,7 @@ def setup_boa_env(chain: str, rpc_url: Optional[str] = None) -> None:
         boa.env.add_account(dummy_account)
 
 
-def get_account_from_private_key(private_key: str) -> Tuple[str, Account]:
+def get_account_from_private_key(private_key: str) -> tuple[str, Account]:
     """
     Get an account from a private key.
 
@@ -248,7 +248,7 @@ def generate_nonce() -> bytes:
     return os.urandom(32)
 
 
-def get_block_number(chain: str, rpc_url: Optional[str] = None) -> int:
+def get_block_number(chain: str, rpc_url: str | None = None) -> int:
     """
     Get the current block number for a chain.
 
@@ -263,11 +263,12 @@ def get_block_number(chain: str, rpc_url: Optional[str] = None) -> int:
 # Transaction Execution Helpers
 # =============================================================================
 
+
 def setup_boa_with_account(
     chain: str,
     private_key: str,
-    rpc_url: Optional[str] = None,
-) -> Tuple[str, Any]:
+    rpc_url: str | None = None,
+) -> tuple[str, Any]:
     """
     Set up titanoboa environment with a signing account.
 
@@ -301,7 +302,7 @@ def execute_approve(
     private_key: str,
     spender: str,
     amount: int,
-    rpc_url: Optional[str] = None,
+    rpc_url: str | None = None,
 ) -> str:
     """
     Approve a spender to transfer USDC on behalf of the signer.
@@ -325,8 +326,10 @@ def execute_approve(
     tx = usdc.approve(spender, amount)
 
     try:
-        if hasattr(boa.env, 'last_tx') and boa.env.last_tx:
-            return boa.env.last_tx.hex() if hasattr(boa.env.last_tx, 'hex') else str(boa.env.last_tx)
+        if hasattr(boa.env, "last_tx") and boa.env.last_tx:
+            return (
+                boa.env.last_tx.hex() if hasattr(boa.env.last_tx, "hex") else str(boa.env.last_tx)
+            )
         return str(tx) if tx else ""
     except Exception:
         return str(tx) if tx else ""
@@ -336,7 +339,7 @@ def execute_deposit(
     chain: str,
     private_key: str,
     amount: int,
-    rpc_url: Optional[str] = None,
+    rpc_url: str | None = None,
 ) -> str:
     """
     Deposit USDC into the Gateway contract.
@@ -361,15 +364,21 @@ def execute_deposit(
     except Exception as e:
         error_str = str(e)
         if "0x" in error_str and len(error_str) > 100:
-            if hasattr(boa.env, 'last_tx') and boa.env.last_tx:
-                tx_hash = boa.env.last_tx.hex() if hasattr(boa.env.last_tx, 'hex') else str(boa.env.last_tx)
+            if hasattr(boa.env, "last_tx") and boa.env.last_tx:
+                tx_hash = (
+                    boa.env.last_tx.hex()
+                    if hasattr(boa.env.last_tx, "hex")
+                    else str(boa.env.last_tx)
+                )
                 return tx_hash
             return ""
         raise
 
     try:
-        if hasattr(boa.env, 'last_tx') and boa.env.last_tx:
-            return boa.env.last_tx.hex() if hasattr(boa.env.last_tx, 'hex') else str(boa.env.last_tx)
+        if hasattr(boa.env, "last_tx") and boa.env.last_tx:
+            return (
+                boa.env.last_tx.hex() if hasattr(boa.env.last_tx, "hex") else str(boa.env.last_tx)
+            )
         return str(tx) if tx else ""
     except Exception:
         return str(tx) if tx else ""
@@ -380,7 +389,7 @@ def execute_gateway_mint(
     private_key: str,
     attestation: bytes,
     signature: bytes,
-    rpc_url: Optional[str] = None,
+    rpc_url: str | None = None,
 ) -> str:
     """
     Call gatewayMint on the destination chain's minter contract.
@@ -404,8 +413,10 @@ def execute_gateway_mint(
     tx = minter.gatewayMint(attestation, signature)
 
     try:
-        if hasattr(boa.env, 'last_tx') and boa.env.last_tx:
-            return boa.env.last_tx.hex() if hasattr(boa.env.last_tx, 'hex') else str(boa.env.last_tx)
+        if hasattr(boa.env, "last_tx") and boa.env.last_tx:
+            return (
+                boa.env.last_tx.hex() if hasattr(boa.env.last_tx, "hex") else str(boa.env.last_tx)
+            )
         return str(tx) if tx else ""
     except Exception:
         return str(tx) if tx else ""
@@ -415,7 +426,7 @@ def check_allowance(
     chain: str,
     owner: str,
     spender: str,
-    rpc_url: Optional[str] = None,
+    rpc_url: str | None = None,
 ) -> int:
     """
     Check USDC allowance for a spender.
@@ -440,7 +451,7 @@ def check_allowance(
 
 def get_withdrawal_delay(
     chain: str,
-    rpc_url: Optional[str] = None,
+    rpc_url: str | None = None,
 ) -> int:
     """
     Get the trustless withdrawal delay (in blocks) from the Gateway contract.
@@ -464,7 +475,7 @@ def get_withdrawal_delay(
 def get_withdrawal_block(
     chain: str,
     address: str,
-    rpc_url: Optional[str] = None,
+    rpc_url: str | None = None,
 ) -> int:
     """
     Get the block number at which a trustless withdrawal becomes completable.
@@ -490,7 +501,7 @@ def execute_initiate_withdrawal(
     chain: str,
     private_key: str,
     amount: int,
-    rpc_url: Optional[str] = None,
+    rpc_url: str | None = None,
 ) -> str:
     """
     Initiate a trustless withdrawal from the Gateway contract.
@@ -513,8 +524,10 @@ def execute_initiate_withdrawal(
     tx = gateway.initiateWithdrawal(config.usdc_address, amount)
 
     try:
-        if hasattr(boa.env, 'last_tx') and boa.env.last_tx:
-            return boa.env.last_tx.hex() if hasattr(boa.env.last_tx, 'hex') else str(boa.env.last_tx)
+        if hasattr(boa.env, "last_tx") and boa.env.last_tx:
+            return (
+                boa.env.last_tx.hex() if hasattr(boa.env.last_tx, "hex") else str(boa.env.last_tx)
+            )
         return str(tx) if tx else ""
     except Exception:
         return str(tx) if tx else ""
@@ -523,7 +536,7 @@ def execute_initiate_withdrawal(
 def execute_complete_withdrawal(
     chain: str,
     private_key: str,
-    rpc_url: Optional[str] = None,
+    rpc_url: str | None = None,
 ) -> str:
     """
     Complete a trustless withdrawal from the Gateway contract.
@@ -545,8 +558,10 @@ def execute_complete_withdrawal(
     tx = gateway.withdraw(config.usdc_address)
 
     try:
-        if hasattr(boa.env, 'last_tx') and boa.env.last_tx:
-            return boa.env.last_tx.hex() if hasattr(boa.env.last_tx, 'hex') else str(boa.env.last_tx)
+        if hasattr(boa.env, "last_tx") and boa.env.last_tx:
+            return (
+                boa.env.last_tx.hex() if hasattr(boa.env.last_tx, "hex") else str(boa.env.last_tx)
+            )
         return str(tx) if tx else ""
     except Exception:
         return str(tx) if tx else ""
@@ -557,7 +572,7 @@ def execute_deposit_for(
     private_key: str,
     depositor: str,
     amount: int,
-    rpc_url: Optional[str] = None,
+    rpc_url: str | None = None,
 ) -> str:
     """
     Deposit USDC into the Gateway contract on behalf of another address.
@@ -581,8 +596,10 @@ def execute_deposit_for(
     tx = gateway.depositFor(config.usdc_address, depositor, amount)
 
     try:
-        if hasattr(boa.env, 'last_tx') and boa.env.last_tx:
-            return boa.env.last_tx.hex() if hasattr(boa.env.last_tx, 'hex') else str(boa.env.last_tx)
+        if hasattr(boa.env, "last_tx") and boa.env.last_tx:
+            return (
+                boa.env.last_tx.hex() if hasattr(boa.env.last_tx, "hex") else str(boa.env.last_tx)
+            )
         return str(tx) if tx else ""
     except Exception:
         return str(tx) if tx else ""
@@ -591,7 +608,7 @@ def execute_deposit_for(
 def get_usdc_balance(
     chain: str,
     address: str,
-    rpc_url: Optional[str] = None,
+    rpc_url: str | None = None,
 ) -> int:
     """
     Get USDC balance for an address.
@@ -616,7 +633,7 @@ def get_usdc_balance(
 def get_gateway_balance(
     chain: str,
     address: str,
-    rpc_url: Optional[str] = None,
+    rpc_url: str | None = None,
 ) -> int:
     """
     Get Gateway balance for an address.

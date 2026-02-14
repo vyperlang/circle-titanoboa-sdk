@@ -6,7 +6,7 @@ This module provides the Python equivalent as a Protocol, plus a batteries-inclu
 PrivateKeySigner for dev/testing.
 """
 
-from typing import Any, Dict, List, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from eth_account import Account
 
@@ -25,10 +25,10 @@ class Signer(Protocol):
 
     def sign_typed_data(
         self,
-        domain: Dict[str, Any],
-        types: Dict[str, List[Dict[str, str]]],
+        domain: dict[str, Any],
+        types: dict[str, list[dict[str, str]]],
         primary_type: str,
-        message: Dict[str, Any],
+        message: dict[str, Any],
     ) -> str: ...
 
 
@@ -51,10 +51,10 @@ class PrivateKeySigner:
 
     def sign_typed_data(
         self,
-        domain: Dict[str, Any],
-        types: Dict[str, List[Dict[str, str]]],
+        domain: dict[str, Any],
+        types: dict[str, list[dict[str, str]]],
         primary_type: str,
-        message: Dict[str, Any],
+        message: dict[str, Any],
     ) -> str:
         """
         Sign EIP-712 typed data.

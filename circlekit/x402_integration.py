@@ -17,13 +17,13 @@ Usage:
     register_batch_scheme(client, signer=PrivateKeySigner('0x...'))
 """
 
-from typing import Any, List, Optional
+from typing import Any
 
 from circlekit.signer import Signer
 from circlekit.x402 import BatchEvmScheme
 
 
-def create_resource_server(url: Optional[str] = None, is_testnet: bool = True):
+def create_resource_server(url: str | None = None, is_testnet: bool = True):
     """Create an x402 ResourceServer backed by Circle Gateway.
 
     Args:
@@ -38,14 +38,13 @@ def create_resource_server(url: Optional[str] = None, is_testnet: bool = True):
     """
     try:
         from x402.server import x402ResourceServer
-    except ImportError:
+    except ImportError as err:
         raise ImportError(
-            "x402 package required for this integration. "
-            "Install with: pip install x402[httpx]"
-        )
+            "x402 package required for this integration. Install with: pip install x402[httpx]"
+        ) from err
 
-    from circlekit.facilitator import BatchFacilitatorClient
     from circlekit.constants import get_gateway_api_url
+    from circlekit.facilitator import BatchFacilitatorClient
 
     client = BatchFacilitatorClient(url=url or get_gateway_api_url(is_testnet))
     return x402ResourceServer(client)  # type: ignore[arg-type]
@@ -54,7 +53,7 @@ def create_resource_server(url: Optional[str] = None, is_testnet: bool = True):
 def register_batch_scheme(
     client: Any,
     signer: Signer,
-    networks: Optional[List[str]] = None,
+    networks: list[str] | None = None,
 ) -> BatchEvmScheme:
     """Register the Circle Gateway batch scheme with an x402 client.
 
@@ -70,6 +69,6 @@ def register_batch_scheme(
         The BatchEvmScheme instance that was registered.
     """
     scheme = BatchEvmScheme(signer)
-    for network in (networks or ["eip155:*"]):
+    for network in networks or ["eip155:*"]:
         client.register(network, scheme)
     return scheme

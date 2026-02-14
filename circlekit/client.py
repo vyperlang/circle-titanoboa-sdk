@@ -27,33 +27,39 @@ import os
 import warnings
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any, Dict, Generic, Optional, TypeVar
+from typing import Any, Generic, TypeVar
+
 import httpx
 
+from circlekit.boa_utils import (
+    format_usdc,
+    parse_usdc,
+)
+from circlekit.boa_utils import (
+    get_block_number as _boa_get_block_number,
+)
+from circlekit.boa_utils import (
+    get_withdrawal_block as _boa_get_withdrawal_block,
+)
+from circlekit.boa_utils import (
+    get_withdrawal_delay as _boa_get_withdrawal_delay,
+)
 from circlekit.constants import (
     ChainConfig,
     get_chain_config,
     get_gateway_api_url,
 )
-from circlekit.boa_utils import (
-    format_usdc,
-    parse_usdc,
-    get_withdrawal_delay as _boa_get_withdrawal_delay,
-    get_withdrawal_block as _boa_get_withdrawal_block,
-    get_block_number as _boa_get_block_number,
-)
-from circlekit.signer import Signer, PrivateKeySigner
-from circlekit.tx_executor import TxExecutor, BoaTxExecutor
+from circlekit.signer import PrivateKeySigner, Signer
+from circlekit.tx_executor import BoaTxExecutor, TxExecutor
 from circlekit.x402 import (
-    get_payment_required,
-    decode_payment_response,
-    create_payment_payload,
-    create_payment_header,
+    PAYMENT_SIGNATURE_HEADER,
     PaymentPayload,
     PaymentRequirements,
-    PAYMENT_SIGNATURE_HEADER,
+    create_payment_header,
+    create_payment_payload,
+    decode_payment_response,
+    get_payment_required,
 )
-
 
 # Default max fee for withdrawals: 2.01 USDC = 2_010_000 raw units
 DEFAULT_WITHDRAW_MAX_FEE = 2_010_000
@@ -64,7 +70,8 @@ T = TypeVar("T")
 @dataclass
 class DepositResult:
     """Result of a deposit operation."""
-    approval_tx_hash: Optional[str]
+
+    approval_tx_hash: str | None
     deposit_tx_hash: str
     amount: int
     formatted_amount: str
@@ -74,6 +81,7 @@ class DepositResult:
 @dataclass
 class PayResult(Generic[T]):
     """Result of a pay operation."""
+
     data: T
     amount: int
     formatted_amount: str
@@ -84,6 +92,7 @@ class PayResult(Generic[T]):
 @dataclass
 class WithdrawResult:
     """Result of a withdraw operation."""
+
     mint_tx_hash: str
     transfer_id: str
     amount: int
@@ -96,6 +105,7 @@ class WithdrawResult:
 @dataclass
 class WalletBalance:
     """Wallet USDC balance."""
+
     balance: int
     formatted: str
 
@@ -103,6 +113,7 @@ class WalletBalance:
 @dataclass
 class GatewayBalance:
     """Gateway balance with available/locked breakdown."""
+
     total: int
     available: int
     withdrawing: int
@@ -116,6 +127,7 @@ class GatewayBalance:
 @dataclass
 class Balances:
     """Combined wallet and Gateway balances."""
+
     wallet: WalletBalance
     gateway: GatewayBalance
 
@@ -123,18 +135,20 @@ class Balances:
 @dataclass
 class TrustlessWithdrawalResult:
     """Result of a trustless (on-chain) withdrawal operation."""
+
     tx_hash: str
     amount: int
     formatted_amount: str
-    withdrawal_block: Optional[int] = None  # only set for initiate
+    withdrawal_block: int | None = None  # only set for initiate
 
 
 @dataclass
 class SupportsResult:
     """Result of checking if URL supports Gateway."""
+
     supported: bool
-    requirements: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
+    requirements: dict[str, Any] | None = None
+    error: str | None = None
 
 
 class GatewayClient:
@@ -158,14 +172,14 @@ class GatewayClient:
     def __init__(
         self,
         chain: str,
-        signer: Optional[Signer] = None,
-        tx_executor: Optional[TxExecutor] = None,
-        rpc_url: Optional[str] = None,
-        private_key: Optional[str] = None,
+        signer: Signer | None = None,
+        tx_executor: TxExecutor | None = None,
+        rpc_url: str | None = None,
+        private_key: str | None = None,
     ):
         self._chain = chain
         self._rpc_url = rpc_url
-        self._tx_executor: Optional[TxExecutor]
+        self._tx_executor: TxExecutor | None
 
         if private_key is not None:
             pk_signer = PrivateKeySigner(private_key)
@@ -214,7 +228,7 @@ class GatewayClient:
     async def deposit(
         self,
         amount: str,
-        approve_amount: Optional[str] = None,
+        approve_amount: str | None = None,
         skip_approval_check: bool = False,
     ) -> DepositResult:
         """
@@ -243,11 +257,9 @@ class GatewayClient:
         # Preflight: check wallet USDC balance
         wallet = await self.get_usdc_balance()
         if wallet.balance < amount_raw:
-            raise ValueError(
-                f"Insufficient USDC balance. Have: {wallet.formatted}, Need: {amount}"
-            )
+            raise ValueError(f"Insufficient USDC balance. Have: {wallet.formatted}, Need: {amount}")
 
-        approval_tx_hash: Optional[str] = None
+        approval_tx_hash: str | None = None
 
         loop = asyncio.get_event_loop()
 
@@ -316,8 +328,8 @@ class GatewayClient:
         self,
         url: str,
         method: str = "GET",
-        headers: Optional[Dict[str, str]] = None,
-        body: Optional[Any] = None,
+        headers: dict[str, str] | None = None,
+        body: Any | None = None,
     ) -> PayResult:
         """
         Pay for an x402-protected resource.
@@ -358,7 +370,9 @@ class GatewayClient:
                     response=response,
                 )
             return PayResult(
-                data=response.json() if response.headers.get("content-type", "").startswith("application/json") else response.text,
+                data=response.json()
+                if response.headers.get("content-type", "").startswith("application/json")
+                else response.text,
                 amount=0,
                 formatted_amount="0",
                 transaction="",
@@ -433,9 +447,9 @@ class GatewayClient:
     async def withdraw(
         self,
         amount: str,
-        chain: Optional[str] = None,
-        recipient: Optional[str] = None,
-        max_fee: Optional[int] = None,
+        chain: str | None = None,
+        recipient: str | None = None,
+        max_fee: int | None = None,
     ) -> WithdrawResult:
         """
         Withdraw USDC from Gateway to wallet.
@@ -507,12 +521,6 @@ class GatewayClient:
 
         # BurnIntent wraps TransferSpec
         max_block_height = 2**256 - 1  # maxUint256
-
-        burn_intent = {
-            "maxBlockHeight": str(max_block_height),
-            "maxFee": str(max_fee),
-            "spec": transfer_spec,
-        }
 
         # EIP-712 domain for withdrawal: {name: "GatewayWallet", version: "1"}
         # No chainId or verifyingContract — withdrawal signing domain is unscoped
@@ -668,7 +676,7 @@ class GatewayClient:
             recipient=dest_recipient,
         )
 
-    async def get_gateway_balance(self, address: Optional[str] = None) -> GatewayBalance:
+    async def get_gateway_balance(self, address: str | None = None) -> GatewayBalance:
         """
         Get Gateway balance for an address.
 
@@ -691,7 +699,7 @@ class GatewayClient:
                     "depositor": address,
                     "domain": self._config.gateway_domain,
                 }
-            ]
+            ],
         }
         response = await self._http.post(api_url, json=request_body)
 
@@ -726,7 +734,7 @@ class GatewayClient:
             formatted_withdrawable=format_usdc(withdrawable),
         )
 
-    async def get_usdc_balance(self, address: Optional[str] = None) -> WalletBalance:
+    async def get_usdc_balance(self, address: str | None = None) -> WalletBalance:
         """
         Get on-chain USDC wallet balance for an address.
 
@@ -758,17 +766,14 @@ class GatewayClient:
         response = await self._http.post(rpc_url, json=rpc_payload)
         result = response.json()
 
-        if "result" in result and result["result"]:
-            wallet_balance = int(result["result"], 16)
-        else:
-            wallet_balance = 0
+        wallet_balance = int(result["result"], 16) if "result" in result and result["result"] else 0
 
         return WalletBalance(
             balance=wallet_balance,
             formatted=format_usdc(wallet_balance),
         )
 
-    async def get_balance(self, address: Optional[str] = None) -> GatewayBalance:
+    async def get_balance(self, address: str | None = None) -> GatewayBalance:
         """
         Get Gateway balance for an address.
 
@@ -782,7 +787,7 @@ class GatewayClient:
         """
         return await self.get_gateway_balance(address)
 
-    async def get_balances(self, address: Optional[str] = None) -> Balances:
+    async def get_balances(self, address: str | None = None) -> Balances:
         """
         Get wallet and Gateway balances.
 
@@ -857,7 +862,7 @@ class GatewayClient:
         self,
         amount: str,
         depositor: str,
-        approve_amount: Optional[str] = None,
+        approve_amount: str | None = None,
         skip_approval_check: bool = False,
     ) -> DepositResult:
         """
@@ -888,11 +893,9 @@ class GatewayClient:
         # Preflight: check wallet USDC balance
         wallet = await self.get_usdc_balance()
         if wallet.balance < amount_raw:
-            raise ValueError(
-                f"Insufficient USDC balance. Have: {wallet.formatted}, Need: {amount}"
-            )
+            raise ValueError(f"Insufficient USDC balance. Have: {wallet.formatted}, Need: {amount}")
 
-        approval_tx_hash: Optional[str] = None
+        approval_tx_hash: str | None = None
 
         loop = asyncio.get_event_loop()
 
@@ -955,7 +958,7 @@ class GatewayClient:
             self._rpc_url,
         )
 
-    async def get_trustless_withdrawal_block(self, address: Optional[str] = None) -> int:
+    async def get_trustless_withdrawal_block(self, address: str | None = None) -> int:
         """
         Get the block at which a trustless withdrawal becomes completable.
 
@@ -993,7 +996,9 @@ class GatewayClient:
             TrustlessWithdrawalResult with tx_hash and withdrawal_block
         """
         if self._tx_executor is None:
-            raise ValueError("initiate_trustless_withdrawal() requires a tx_executor or private_key")
+            raise ValueError(
+                "initiate_trustless_withdrawal() requires a tx_executor or private_key"
+            )
 
         amount_raw = parse_usdc(amount)
 
@@ -1036,7 +1041,9 @@ class GatewayClient:
             TrustlessWithdrawalResult with tx_hash
         """
         if self._tx_executor is None:
-            raise ValueError("complete_trustless_withdrawal() requires a tx_executor or private_key")
+            raise ValueError(
+                "complete_trustless_withdrawal() requires a tx_executor or private_key"
+            )
 
         loop = asyncio.get_event_loop()
 
@@ -1047,7 +1054,10 @@ class GatewayClient:
             if withdrawal_block == 0:
                 raise ValueError("No withdrawal has been initiated.")
             current_block = await loop.run_in_executor(
-                None, _boa_get_block_number, self._chain, self._rpc_url,
+                None,
+                _boa_get_block_number,
+                self._chain,
+                self._rpc_url,
             )
             raise ValueError(
                 f"Withdrawal not yet available. Current block: {current_block}, "
@@ -1071,7 +1081,7 @@ class GatewayClient:
         self,
         amount: str,
         destination_chain: str,
-        recipient: Optional[str] = None,
+        recipient: str | None = None,
     ) -> WithdrawResult:
         """
         Transfer USDC from Gateway to another chain/wallet.

@@ -7,9 +7,9 @@ FacilitatorClient protocol and that create_resource_server works.
 Run with: .venv/bin/pytest tests/test_x402_integration.py -v
 """
 
-import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 
 # ============================================================================
 # TEST: _to_dict helper
@@ -21,6 +21,7 @@ class TestToDict:
 
     def test_dict_passthrough(self):
         from circlekit.facilitator import _to_dict
+
         d = {"foo": "bar"}
         assert _to_dict(d) is d
 
@@ -35,8 +36,10 @@ class TestToDict:
         assert result == {"fooBar": "baz"}
 
     def test_mapping_fallback(self):
-        from circlekit.facilitator import _to_dict
         from collections import OrderedDict
+
+        from circlekit.facilitator import _to_dict
+
         od = OrderedDict([("a", 1), ("b", 2)])
         result = _to_dict(od)
         # OrderedDict is a dict subclass, so it's returned as-is
@@ -52,37 +55,47 @@ class TestBatchFacilitatorProtocol:
     """Test that BatchFacilitatorClient matches x402's FacilitatorClient protocol."""
 
     def test_has_verify_method(self):
-        from circlekit.facilitator import BatchFacilitatorClient
         import inspect
+
+        from circlekit.facilitator import BatchFacilitatorClient
+
         client = BatchFacilitatorClient()
         assert hasattr(client, "verify")
         assert inspect.iscoroutinefunction(client.verify)
 
     def test_has_settle_method(self):
-        from circlekit.facilitator import BatchFacilitatorClient
         import inspect
+
+        from circlekit.facilitator import BatchFacilitatorClient
+
         client = BatchFacilitatorClient()
         assert hasattr(client, "settle")
         assert inspect.iscoroutinefunction(client.settle)
 
     def test_has_get_supported_method(self):
-        from circlekit.facilitator import BatchFacilitatorClient
         import inspect
+
+        from circlekit.facilitator import BatchFacilitatorClient
+
         client = BatchFacilitatorClient()
         assert hasattr(client, "get_supported")
         # get_supported must be sync (x402's initialize() calls it synchronously)
         assert not inspect.iscoroutinefunction(client.get_supported)
 
     def test_has_aclose_method(self):
-        from circlekit.facilitator import BatchFacilitatorClient
         import inspect
+
+        from circlekit.facilitator import BatchFacilitatorClient
+
         client = BatchFacilitatorClient()
         assert hasattr(client, "aclose")
         assert inspect.iscoroutinefunction(client.aclose)
 
     def test_has_close_method(self):
-        from circlekit.facilitator import BatchFacilitatorClient
         import inspect
+
+        from circlekit.facilitator import BatchFacilitatorClient
+
         client = BatchFacilitatorClient()
         assert hasattr(client, "close")
         assert inspect.iscoroutinefunction(client.close)
@@ -94,11 +107,12 @@ class TestProtocolStructuralMatch:
     def test_x402_protocol_isinstance(self):
         """BatchFacilitatorClient satisfies x402's FacilitatorClient protocol."""
         try:
-            from x402.server import FacilitatorClient
+            from x402.server import FacilitatorClient  # noqa: F401
         except ImportError:
             pytest.skip("x402 package not installed")
 
         from circlekit.facilitator import BatchFacilitatorClient
+
         # Protocol check — structural typing
         # We can't use isinstance with Protocol unless it's @runtime_checkable,
         # so just verify the methods exist with correct signatures
@@ -307,7 +321,9 @@ class TestGetSupported:
     def test_get_supported_is_sync(self):
         """get_supported must be sync — x402's initialize() calls it synchronously."""
         import inspect
+
         from circlekit.facilitator import BatchFacilitatorClient
+
         client = BatchFacilitatorClient()
         assert not inspect.iscoroutinefunction(client.get_supported)
 
@@ -322,6 +338,7 @@ class TestResponseFieldCompatibility:
 
     def test_verify_response_fields(self):
         from circlekit.facilitator import VerifyResponse
+
         r = VerifyResponse(is_valid=True, payer="0xABC", invalid_reason=None)
         assert r.is_valid is True
         assert r.payer == "0xABC"
@@ -329,6 +346,7 @@ class TestResponseFieldCompatibility:
 
     def test_settle_response_fields(self):
         from circlekit.facilitator import SettleResponse
+
         r = SettleResponse(
             success=True,
             transaction="0xTX",
@@ -344,6 +362,7 @@ class TestResponseFieldCompatibility:
     def test_settle_response_has_network_field(self):
         """x402's SettleResponse requires a network field."""
         from circlekit.facilitator import SettleResponse
+
         r = SettleResponse()
         assert hasattr(r, "network")
 
@@ -393,11 +412,13 @@ class TestCreateResourceServer:
     def test_create_resource_server_import(self):
         """create_resource_server is importable from circlekit."""
         from circlekit import create_resource_server
+
         assert callable(create_resource_server)
 
     def test_create_resource_server_from_module(self):
         """create_resource_server is importable from x402_integration."""
         from circlekit.x402_integration import create_resource_server
+
         assert callable(create_resource_server)
 
     def test_create_resource_server_returns_x402_server(self):
@@ -431,8 +452,8 @@ class TestCreateResourceServer:
         except ImportError:
             pytest.skip("x402 package not installed")
 
+        from circlekit.constants import GATEWAY_API_BASE_URL, GATEWAY_API_TESTNET_URL
         from circlekit.x402_integration import create_resource_server
-        from circlekit.constants import GATEWAY_API_TESTNET_URL, GATEWAY_API_BASE_URL
 
         with patch("circlekit.facilitator.BatchFacilitatorClient") as MockClient:
             create_resource_server(is_testnet=True)
@@ -458,15 +479,17 @@ class TestX402ResourceServerInitialize:
         except ImportError:
             pytest.skip("x402 package not installed")
 
-        from circlekit.facilitator import BatchFacilitatorClient, SupportedResponse, SupportedKind
+        from circlekit.facilitator import BatchFacilitatorClient, SupportedKind, SupportedResponse
 
         client = BatchFacilitatorClient()
 
         # Mock get_supported to return kinds without hitting the network
-        supported = SupportedResponse(kinds=[
-            SupportedKind(x402_version=2, scheme="exact", network="eip155:84532"),
-            SupportedKind(x402_version=2, scheme="exact", network="eip155:8453"),
-        ])
+        supported = SupportedResponse(
+            kinds=[
+                SupportedKind(x402_version=2, scheme="exact", network="eip155:84532"),
+                SupportedKind(x402_version=2, scheme="exact", network="eip155:8453"),
+            ]
+        )
         with patch.object(client, "get_supported", return_value=supported):
             server = x402ResourceServer(client)
             server.initialize()
@@ -536,6 +559,8 @@ class TestCreateResourceServerImportError:
         """create_resource_server raises ImportError with helpful message."""
         from circlekit.x402_integration import create_resource_server
 
-        with patch.dict("sys.modules", {"x402": None, "x402.server": None}):
-            with pytest.raises(ImportError, match="x402 package required"):
-                create_resource_server()
+        with (
+            patch.dict("sys.modules", {"x402": None, "x402.server": None}),
+            pytest.raises(ImportError, match="x402 package required"),
+        ):
+            create_resource_server()
