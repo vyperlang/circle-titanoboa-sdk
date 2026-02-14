@@ -11,6 +11,7 @@ BoaTxExecutor wraps the existing boa_utils helpers with a private key.
 from typing import Protocol, runtime_checkable
 
 from circlekit import boa_utils
+from circlekit.key_utils import PrivateKeyLike, account_from_key_like
 
 
 @runtime_checkable
@@ -66,8 +67,17 @@ def _normalize_bytes(v: str | bytes) -> bytes:
 class BoaTxExecutor:
     """TxExecutor backed by titanoboa (requires private key)."""
 
-    def __init__(self, private_key: str):
-        self._private_key = private_key
+    def __init__(self, private_key: PrivateKeyLike):
+        self._account = account_from_key_like(private_key)
+        self._private_key = "0x" + self._account.key.hex()
+
+    def __repr__(self) -> str:
+        return f"BoaTxExecutor(address={self._account.address})"
+
+    @property
+    def address(self) -> str:
+        """The account's wallet address."""
+        return str(self._account.address)
 
     def execute_approve(
         self, chain: str, owner: str, spender: str, amount: int, rpc_url: str | None = None

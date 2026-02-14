@@ -173,6 +173,34 @@ class TestSigner:
         )
         assert isinstance(signer, Signer)
 
+    def test_private_key_signer_from_account_object(self):
+        from circlekit.signer import PrivateKeySigner
+        from eth_account import Account
+
+        account = Account.from_key(
+            "0x0000000000000000000000000000000000000000000000000000000000000001"
+        )
+        signer = PrivateKeySigner(account)
+        assert signer.address == "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf"
+
+    def test_private_key_signer_repr_shows_address(self):
+        from circlekit.signer import PrivateKeySigner
+
+        signer = PrivateKeySigner(
+            "0x0000000000000000000000000000000000000000000000000000000000000001"
+        )
+        r = repr(signer)
+        assert "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf" in r
+
+    def test_private_key_signer_repr_redacts_key(self):
+        from circlekit.signer import PrivateKeySigner
+
+        pk = "0x0000000000000000000000000000000000000000000000000000000000000001"
+        signer = PrivateKeySigner(pk)
+        r = repr(signer)
+        assert pk not in r
+        assert pk[2:] not in r
+
 
 # ============================================================================
 # TEST: boa_utils.py
@@ -942,6 +970,61 @@ class TestGatewayClient:
 
         with pytest.raises(ValueError, match="Either signer or private_key"):
             GatewayClient(chain="arcTestnet")
+
+    def test_client_env_var_fallback(self, monkeypatch):
+        from circlekit.client import GatewayClient
+
+        monkeypatch.setenv(
+            "PRIVATE_KEY",
+            "0x0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        client = GatewayClient(chain="arcTestnet")
+        assert client.address == "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf"
+
+    def test_client_env_var_not_used_when_signer_present(self, monkeypatch):
+        from circlekit.client import GatewayClient
+        from circlekit.signer import PrivateKeySigner
+
+        monkeypatch.setenv(
+            "PRIVATE_KEY",
+            "0x0000000000000000000000000000000000000000000000000000000000000002",
+        )
+        signer = PrivateKeySigner(
+            "0x0000000000000000000000000000000000000000000000000000000000000001"
+        )
+        client = GatewayClient(chain="arcTestnet", signer=signer)
+        # Signer address is used, env var is ignored
+        assert client.address == signer.address
+
+    def test_client_env_var_not_used_when_private_key_present(self, monkeypatch):
+        from circlekit.client import GatewayClient
+
+        monkeypatch.setenv(
+            "PRIVATE_KEY",
+            "0x0000000000000000000000000000000000000000000000000000000000000002",
+        )
+        client = GatewayClient(
+            chain="arcTestnet",
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        assert client.address == "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf"
+
+    def test_client_error_when_no_key_and_no_env(self, monkeypatch):
+        from circlekit.client import GatewayClient
+
+        monkeypatch.delenv("PRIVATE_KEY", raising=False)
+        with pytest.raises(ValueError, match="PRIVATE_KEY"):
+            GatewayClient(chain="arcTestnet")
+
+    def test_client_accepts_account_object(self):
+        from circlekit.client import GatewayClient
+        from eth_account import Account
+
+        account = Account.from_key(
+            "0x0000000000000000000000000000000000000000000000000000000000000001"
+        )
+        client = GatewayClient(chain="arcTestnet", private_key=account)
+        assert client.address == "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf"
 
     def test_client_invalid_chain(self):
         from circlekit.client import GatewayClient

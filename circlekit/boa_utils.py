@@ -18,6 +18,7 @@ import boa
 from eth_account import Account
 
 from circlekit.constants import USDC_DECIMALS, get_chain_config
+from circlekit.key_utils import normalize_private_key
 
 
 def get_rpc_url(chain: str) -> str:
@@ -61,8 +62,7 @@ def get_account_from_private_key(private_key: str) -> tuple[str, Account]:
     Returns:
         Tuple of (address, Account object)
     """
-    if not private_key.startswith("0x"):
-        private_key = "0x" + private_key
+    private_key = normalize_private_key(private_key)
 
     account = Account.from_key(private_key)
     return account.address, account
@@ -286,8 +286,7 @@ def setup_boa_with_account(
     config = get_chain_config(chain)
     url = rpc_url or config.rpc_url
 
-    if not private_key.startswith("0x"):
-        private_key = "0x" + private_key
+    private_key = normalize_private_key(private_key)
 
     account = Account.from_key(private_key)
 

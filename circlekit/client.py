@@ -49,6 +49,7 @@ from circlekit.constants import (
     get_chain_config,
     get_gateway_api_url,
 )
+from circlekit.key_utils import PRIVATE_KEY_ENV_VAR, PrivateKeyLike
 from circlekit.signer import PrivateKeySigner, Signer
 from circlekit.tx_executor import BoaTxExecutor, TxExecutor
 from circlekit.x402 import (
@@ -166,7 +167,10 @@ class GatewayClient:
         signer: Signer instance for EIP-712 signing (pay, withdraw intent)
         tx_executor: TxExecutor instance for onchain transactions (deposit, withdraw mint)
         rpc_url: Optional custom RPC URL
-        private_key: Convenience shorthand — creates both PrivateKeySigner + BoaTxExecutor
+        private_key: Convenience shorthand — creates both PrivateKeySigner + BoaTxExecutor.
+            Also accepts a ``LocalAccount`` object.  Falls back to the
+            ``PRIVATE_KEY`` environment variable when both *private_key*
+            and *signer* are ``None``.
     """
 
     def __init__(
@@ -175,11 +179,17 @@ class GatewayClient:
         signer: Signer | None = None,
         tx_executor: TxExecutor | None = None,
         rpc_url: str | None = None,
-        private_key: str | None = None,
+        private_key: PrivateKeyLike | None = None,
     ):
         self._chain = chain
         self._rpc_url = rpc_url
         self._tx_executor: TxExecutor | None
+
+        # Env var fallback: only when both private_key and signer are absent
+        if private_key is None and signer is None:
+            env_key = os.environ.get(PRIVATE_KEY_ENV_VAR)
+            if env_key:
+                private_key = env_key
 
         if private_key is not None:
             pk_signer = PrivateKeySigner(private_key)
@@ -194,7 +204,10 @@ class GatewayClient:
             self._signer = signer
             self._tx_executor = tx_executor  # may be None
         else:
-            raise ValueError("Either signer or private_key is required")
+            raise ValueError(
+                "Either signer or private_key is required "
+                f"(or set the {PRIVATE_KEY_ENV_VAR} environment variable)"
+            )
 
         # Get chain configuration
         self._config: ChainConfig = get_chain_config(chain)

@@ -10,6 +10,8 @@ from typing import Any, Protocol, runtime_checkable
 
 from eth_account import Account
 
+from circlekit.key_utils import PrivateKeyLike, account_from_key_like
+
 
 @runtime_checkable
 class Signer(Protocol):
@@ -39,11 +41,12 @@ class PrivateKeySigner:
     Wraps a raw private key and implements the Signer protocol.
     """
 
-    def __init__(self, private_key: str):
-        if not private_key.startswith("0x"):
-            private_key = "0x" + private_key
-        self._account = Account.from_key(private_key)
+    def __init__(self, private_key: PrivateKeyLike):
+        self._account = account_from_key_like(private_key)
         self._private_key = self._account.key
+
+    def __repr__(self) -> str:
+        return f"PrivateKeySigner(address={self._account.address})"
 
     @property
     def address(self) -> str:

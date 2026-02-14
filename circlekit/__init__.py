@@ -46,6 +46,7 @@ from circlekit.constants import (
     get_chain_config,
 )
 from circlekit.facilitator import BatchFacilitatorClient
+from circlekit.key_utils import PrivateKeyLike, normalize_private_key
 from circlekit.server import create_gateway_middleware
 from circlekit.signer import PrivateKeySigner, Signer
 from circlekit.tx_executor import BoaTxExecutor, TxExecutor
@@ -69,6 +70,9 @@ __all__ = [
     "TrustlessWithdrawalResult",
     # Server
     "create_gateway_middleware",
+    # Key utilities
+    "PrivateKeyLike",
+    "normalize_private_key",
     # Signer
     "Signer",
     "PrivateKeySigner",

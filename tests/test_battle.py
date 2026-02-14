@@ -70,6 +70,18 @@ class TestInputValidation:
         with pytest.raises((ValueError, Exception)):
             get_account_from_private_key("not-a-valid-key")
 
+    def test_normalize_rejects_short_key(self):
+        from circlekit.key_utils import normalize_private_key
+
+        with pytest.raises(ValueError, match="64 hex chars"):
+            normalize_private_key("0xdead")
+
+    def test_normalize_strips_trailing_newline(self):
+        from circlekit.key_utils import normalize_private_key
+
+        key = "0x0000000000000000000000000000000000000000000000000000000000000001"
+        assert normalize_private_key(key + "\n") == key
+
 
 class TestChainConfigCompleteness:
     """Ensure all chain configs are complete and valid."""
@@ -144,6 +156,42 @@ class TestErrorHandling:
 
 class TestSecurity:
     """Test security-related aspects."""
+
+    def test_private_key_signer_repr_safe(self):
+        from circlekit.signer import PrivateKeySigner
+
+        pk = "0x0000000000000000000000000000000000000000000000000000000000000001"
+        signer = PrivateKeySigner(pk)
+        for text in (repr(signer), str(signer)):
+            assert pk not in text
+            assert pk[2:] not in text
+
+    def test_boa_tx_executor_repr_safe(self):
+        from circlekit.tx_executor import BoaTxExecutor
+
+        pk = "0x0000000000000000000000000000000000000000000000000000000000000001"
+        executor = BoaTxExecutor(pk)
+        for text in (repr(executor), str(executor)):
+            assert pk not in text
+            assert pk[2:] not in text
+
+    def test_executor_constructor_error_hides_key(self):
+        from circlekit.tx_executor import BoaTxExecutor
+
+        bad_key = "0xdeadbeef"
+        try:
+            BoaTxExecutor(bad_key)
+        except ValueError as e:
+            assert "deadbeef" not in str(e)
+
+    def test_signer_constructor_error_hides_key(self):
+        from circlekit.signer import PrivateKeySigner
+
+        bad_key = "0xdeadbeef"
+        try:
+            PrivateKeySigner(bad_key)
+        except ValueError as e:
+            assert "deadbeef" not in str(e)
 
     def test_signature_includes_nonce(self):
         from circlekit.signer import PrivateKeySigner
