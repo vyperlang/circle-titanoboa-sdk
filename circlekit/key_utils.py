@@ -15,7 +15,7 @@ from eth_account.signers.local import LocalAccount
 PrivateKeyLike = str | LocalAccount
 
 # Environment variable name used as a fallback in GatewayClient
-PRIVATE_KEY_ENV_VAR = "PRIVATE_KEY"
+PRIVATE_KEY_ENV_VAR = "CIRCLE_SDK_PRIVATE_KEY"
 
 _HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 

@@ -975,7 +975,7 @@ class TestGatewayClient:
         from circlekit.client import GatewayClient
 
         monkeypatch.setenv(
-            "PRIVATE_KEY",
+            "CIRCLE_SDK_PRIVATE_KEY",
             "0x0000000000000000000000000000000000000000000000000000000000000001",
         )
         client = GatewayClient(chain="arcTestnet")
@@ -986,7 +986,7 @@ class TestGatewayClient:
         from circlekit.signer import PrivateKeySigner
 
         monkeypatch.setenv(
-            "PRIVATE_KEY",
+            "CIRCLE_SDK_PRIVATE_KEY",
             "0x0000000000000000000000000000000000000000000000000000000000000002",
         )
         signer = PrivateKeySigner(
@@ -1000,7 +1000,7 @@ class TestGatewayClient:
         from circlekit.client import GatewayClient
 
         monkeypatch.setenv(
-            "PRIVATE_KEY",
+            "CIRCLE_SDK_PRIVATE_KEY",
             "0x0000000000000000000000000000000000000000000000000000000000000002",
         )
         client = GatewayClient(
@@ -1012,8 +1012,8 @@ class TestGatewayClient:
     def test_client_error_when_no_key_and_no_env(self, monkeypatch):
         from circlekit.client import GatewayClient
 
-        monkeypatch.delenv("PRIVATE_KEY", raising=False)
-        with pytest.raises(ValueError, match="PRIVATE_KEY"):
+        monkeypatch.delenv("CIRCLE_SDK_PRIVATE_KEY", raising=False)
+        with pytest.raises(ValueError, match="CIRCLE_SDK_PRIVATE_KEY"):
             GatewayClient(chain="arcTestnet")
 
     def test_client_accepts_account_object(self):
@@ -1429,6 +1429,50 @@ class TestGatewayClientDepositWithdraw:
         key = "0x0000000000000000000000000000000000000000000000000000000000000001"
         signer = LowercaseAddressSigner(key)
         client = GatewayClient(chain="arcTestnet", signer=signer, private_key=key)
+        assert client.address == signer.address
+
+    def test_constructor_rejects_mismatched_signer_and_tx_executor(self):
+        """Constructor raises if signer address != tx_executor address."""
+        from circlekit.client import GatewayClient
+        from circlekit.signer import PrivateKeySigner
+        from circlekit.tx_executor import BoaTxExecutor
+
+        key1 = "0x0000000000000000000000000000000000000000000000000000000000000001"
+        key2 = "0x0000000000000000000000000000000000000000000000000000000000000002"
+        signer = PrivateKeySigner(key1)
+        executor = BoaTxExecutor(key2)
+        with pytest.raises(ValueError, match="does not match"):
+            GatewayClient(chain="arcTestnet", signer=signer, tx_executor=executor)
+
+    def test_constructor_allows_executor_without_address(self):
+        """Constructor allows a tx_executor that lacks an address attribute."""
+        from circlekit.client import GatewayClient
+        from circlekit.signer import PrivateKeySigner
+
+        class NoAddressExecutor:
+            def execute_approve(self, *a, **kw): ...
+            def execute_deposit(self, *a, **kw): ...
+            def execute_deposit_for(self, *a, **kw): ...
+            def execute_gateway_mint(self, *a, **kw): ...
+            def execute_initiate_withdrawal(self, *a, **kw): ...
+            def execute_complete_withdrawal(self, *a, **kw): ...
+            def check_allowance(self, *a, **kw): ...
+
+        key = "0x0000000000000000000000000000000000000000000000000000000000000001"
+        signer = PrivateKeySigner(key)
+        client = GatewayClient(chain="arcTestnet", signer=signer, tx_executor=NoAddressExecutor())
+        assert client.address == signer.address
+
+    def test_constructor_allows_matching_signer_and_tx_executor(self):
+        """Constructor allows signer + tx_executor when addresses match."""
+        from circlekit.client import GatewayClient
+        from circlekit.signer import PrivateKeySigner
+        from circlekit.tx_executor import BoaTxExecutor
+
+        key = "0x0000000000000000000000000000000000000000000000000000000000000001"
+        signer = PrivateKeySigner(key)
+        executor = BoaTxExecutor(key)
+        client = GatewayClient(chain="arcTestnet", signer=signer, tx_executor=executor)
         assert client.address == signer.address
 
 

@@ -169,8 +169,8 @@ class GatewayClient:
         rpc_url: Optional custom RPC URL
         private_key: Convenience shorthand — creates both PrivateKeySigner + BoaTxExecutor.
             Also accepts a ``LocalAccount`` object.  Falls back to the
-            ``PRIVATE_KEY`` environment variable when both *private_key*
-            and *signer* are ``None``.
+            ``CIRCLE_SDK_PRIVATE_KEY`` environment variable when both
+            *private_key* and *signer* are ``None``.
     """
 
     def __init__(
@@ -208,6 +208,18 @@ class GatewayClient:
                 "Either signer or private_key is required "
                 f"(or set the {PRIVATE_KEY_ENV_VAR} environment variable)"
             )
+
+        # Guard against signer/tx_executor address divergence.
+        # If the executor exposes an address (e.g. BoaTxExecutor), the two
+        # must agree — otherwise intents are signed for one account while
+        # onchain txs execute from another.
+        if self._tx_executor is not None:
+            executor_addr = getattr(self._tx_executor, "address", None)
+            if executor_addr is not None and self._signer.address.lower() != executor_addr.lower():
+                raise ValueError(
+                    f"signer address {self._signer.address} does not match "
+                    f"tx_executor address {executor_addr}"
+                )
 
         # Get chain configuration
         self._config: ChainConfig = get_chain_config(chain)
