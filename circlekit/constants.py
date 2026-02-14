@@ -17,6 +17,9 @@ X402_VERSION = 2
 # USDC decimals
 USDC_DECIMALS = 6
 
+# Default max timeout for payment signatures (4 days in seconds)
+DEFAULT_MAX_TIMEOUT_SECONDS = 345600
+
 # Gateway contract addresses (per client/index.mjs:292-295)
 TESTNET_GATEWAY_WALLET = "0x0077777d7EBA4688BDeF3E311b846F25870A19B9"
 TESTNET_GATEWAY_MINTER = "0x0022222ABE238Cc2C7Bb1f21003F0a260052475B"

@@ -16,6 +16,7 @@ The x402 protocol uses HTTP 402 status codes to negotiate payments:
 import base64
 import json
 import time
+import warnings
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
 
@@ -23,6 +24,7 @@ from circlekit.constants import (
     CIRCLE_BATCHING_NAME,
     CIRCLE_BATCHING_VERSION,
     CIRCLE_BATCHING_SCHEME,
+    DEFAULT_MAX_TIMEOUT_SECONDS,
     X402_VERSION,
     USDC_DECIMALS,
 )
@@ -54,7 +56,7 @@ class PaymentRequirements:
     asset: str
     amount: str
     pay_to: str
-    max_timeout_seconds: int = 345600  # 4 days default
+    max_timeout_seconds: int = DEFAULT_MAX_TIMEOUT_SECONDS
     extra: Dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -105,7 +107,16 @@ class X402Response:
         return None
 
     def supports_gateway(self) -> bool:
-        """Check if any payment option supports Gateway batching."""
+        """Check if any payment option supports Gateway batching.
+
+        .. deprecated::
+            Use ``get_gateway_option() is not None`` instead.
+        """
+        warnings.warn(
+            "supports_gateway() is deprecated, use get_gateway_option() is not None",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         return self.get_gateway_option() is not None
 
 
@@ -162,7 +173,16 @@ class PaymentInfo:
 
     @property
     def amount_formatted(self) -> str:
-        """Format the amount as human-readable USDC."""
+        """Format the amount as human-readable USDC.
+
+        .. deprecated::
+            Use ``format_usdc(int(info.amount))`` instead.
+        """
+        warnings.warn(
+            "PaymentInfo.amount_formatted is deprecated, use format_usdc(int(info.amount)) instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         return f"{int(self.amount) / 10**USDC_DECIMALS:.6f}"
 
 
@@ -194,7 +214,7 @@ def _parse_x402_dict(data: Dict) -> X402Response:
             asset=opt.get("asset", ""),
             amount=str(opt.get("amount", "0")),
             pay_to=opt.get("payTo", ""),
-            max_timeout_seconds=opt.get("maxTimeoutSeconds", 345600),
+            max_timeout_seconds=opt.get("maxTimeoutSeconds", DEFAULT_MAX_TIMEOUT_SECONDS),
             extra=opt.get("extra", {}),
         )
         accepts.append(requirements)
@@ -526,7 +546,8 @@ def build_402_response(
     """
     Build a 402 response body for a seller.
 
-    This is used by server middleware to construct proper 402 responses.
+    .. deprecated::
+        Use :func:`create_gateway_middleware` and its ``require()`` method instead.
 
     Args:
         seller_address: Address to receive payment
@@ -539,6 +560,11 @@ def build_402_response(
     Returns:
         Dict suitable for JSON response
     """
+    warnings.warn(
+        "build_402_response() is deprecated, use create_gateway_middleware().require() instead",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     return {
         "x402Version": X402_VERSION,
         "resource": {
@@ -553,7 +579,7 @@ def build_402_response(
                 "asset": usdc_address,
                 "amount": amount,
                 "payTo": seller_address,
-                "maxTimeoutSeconds": 345600,
+                "maxTimeoutSeconds": DEFAULT_MAX_TIMEOUT_SECONDS,
                 "extra": {
                     "name": CIRCLE_BATCHING_NAME,
                     "version": CIRCLE_BATCHING_VERSION,

@@ -32,10 +32,10 @@ import httpx
 
 from circlekit.constants import (
     ChainConfig,
+    get_chain_config,
     get_gateway_api_url,
 )
 from circlekit.boa_utils import (
-    get_chain_config,
     format_usdc,
     parse_usdc,
     get_withdrawal_delay as _boa_get_withdrawal_delay,
@@ -309,8 +309,6 @@ class GatewayClient:
         Returns:
             PaymentPayload with signature and authorization
         """
-        if self._signer is None:
-            raise ValueError("create_payment_payload() requires a signer or private_key")
         return create_payment_payload(self._signer, requirements, x402_version)
 
     async def pay(
@@ -367,7 +365,7 @@ class GatewayClient:
             )
 
         # Step 2: Parse 402 response (v2 header strict, v1 body fallback)
-        payment_required_header = response.headers.get("payment-required") or response.headers.get("PAYMENT-REQUIRED")
+        payment_required_header = response.headers.get("payment-required")
         x402_response = get_payment_required(payment_required_header, response.content)
 
         # Find Gateway batching option
@@ -412,7 +410,7 @@ class GatewayClient:
         # Extract transaction from PAYMENT-RESPONSE header first, then body fallback.
         # Best-effort: malformed header should not fail an otherwise successful payment.
         transaction = ""
-        payment_response_header = paid_response.headers.get("payment-response") or paid_response.headers.get("PAYMENT-RESPONSE")
+        payment_response_header = paid_response.headers.get("payment-response")
         if payment_response_header:
             try:
                 receipt = decode_payment_response(payment_response_header)
@@ -708,7 +706,7 @@ class GatewayClient:
             raise ValueError("Gateway balance query returned empty balances")
 
         def _parse_balance(val: str) -> int:
-            return int(Decimal(val) * 1_000_000)
+            return int(Decimal(val) * 10**6)
 
         balance_data = balances_list[0]
         available = _parse_balance(balance_data.get("balance", "0"))
@@ -825,7 +823,7 @@ class GatewayClient:
                 )
 
             # Parse 402 response (v2 header strict, v1 body fallback)
-            payment_required_header = response.headers.get("payment-required") or response.headers.get("PAYMENT-REQUIRED")
+            payment_required_header = response.headers.get("payment-required")
             x402_response = get_payment_required(payment_required_header, response.content)
             gateway_option = x402_response.get_gateway_option()
 

@@ -23,15 +23,20 @@ Usage:
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from circlekit.constants import (
     CHAIN_CONFIGS,
+    CIRCLE_BATCHING_NAME,
+    CIRCLE_BATCHING_SCHEME,
+    CIRCLE_BATCHING_VERSION,
     ChainConfig,
+    DEFAULT_MAX_TIMEOUT_SECONDS,
+    X402_VERSION,
     get_gateway_api_url,
 )
 from circlekit.boa_utils import parse_usdc
-from circlekit.facilitator import BatchFacilitatorClient, VerifyResponse
+from circlekit.facilitator import BatchFacilitatorClient, SettleResponse, VerifyResponse
 from circlekit.x402 import (
     decode_payment_header,
     encode_payment_required,
@@ -85,7 +90,7 @@ class GatewayMiddleware:
         self,
         payment_header: str,
         price: str,
-    ) -> tuple:
+    ) -> Tuple[Dict[str, Any], Dict[str, Any], str]:
         """Decode a payment header and build server-side requirements.
 
         Returns:
@@ -111,15 +116,15 @@ class GatewayMiddleware:
         matched_chain = self._accepted_chains[network]
 
         server_requirements = {
-            "scheme": "exact",
+            "scheme": CIRCLE_BATCHING_SCHEME,
             "network": network,
             "asset": matched_chain.usdc_address,
             "amount": str(amount),
             "payTo": self._config.seller_address,
-            "maxTimeoutSeconds": 345600,
+            "maxTimeoutSeconds": DEFAULT_MAX_TIMEOUT_SECONDS,
             "extra": {
-                "name": "GatewayWalletBatched",
-                "version": "1",
+                "name": CIRCLE_BATCHING_NAME,
+                "version": CIRCLE_BATCHING_VERSION,
                 "verifyingContract": matched_chain.gateway_address,
             },
         }
@@ -167,35 +172,15 @@ class GatewayMiddleware:
             payment_requirements=server_requirements,
         )
 
-    async def settle(self, payment_header: str, price: str) -> PaymentInfo:
-        """
-        Settle a verified payment via the Gateway API.
-
-        Args:
-            payment_header: Value of Payment-Signature header
-            price: Price in USD (e.g., "$0.01")
-
-        Returns:
-            PaymentInfo with transaction hash and response headers.
-
-        Raises:
-            ValueError: On malformed header, unsupported network, or settlement failure.
-        """
-        header_data, server_requirements, network = self._decode_and_resolve(
-            payment_header, price,
-        )
+    def _build_payment_info(
+        self,
+        header_data: Dict[str, Any],
+        settle_result: SettleResponse,
+        network: str,
+        price: str,
+    ) -> PaymentInfo:
+        """Build a PaymentInfo from a successful settle result."""
         amount = parse_usdc(price)
-
-        settle_result = await self._facilitator.settle(
-            payment_payload=header_data,
-            payment_requirements=server_requirements,
-        )
-
-        if not settle_result.success:
-            raise ValueError(
-                f"Payment settlement failed: {settle_result.error_reason}"
-            )
-
         payload = header_data.get("payload", header_data)
         authorization = payload.get("authorization", {})
         payer = authorization.get("from", "")
@@ -218,6 +203,36 @@ class GatewayMiddleware:
             transaction=settle_result.transaction,
             response_headers=response_headers,
         )
+
+    async def settle(self, payment_header: str, price: str) -> PaymentInfo:
+        """
+        Settle a verified payment via the Gateway API.
+
+        Args:
+            payment_header: Value of Payment-Signature header
+            price: Price in USD (e.g., "$0.01")
+
+        Returns:
+            PaymentInfo with transaction hash and response headers.
+
+        Raises:
+            ValueError: On malformed header, unsupported network, or settlement failure.
+        """
+        header_data, server_requirements, network = self._decode_and_resolve(
+            payment_header, price,
+        )
+
+        settle_result = await self._facilitator.settle(
+            payment_payload=header_data,
+            payment_requirements=server_requirements,
+        )
+
+        if not settle_result.success:
+            raise ValueError(
+                f"Payment settlement failed: {settle_result.error_reason}"
+            )
+
+        return self._build_payment_info(header_data, settle_result, network, price)
 
     async def process_request(
         self,
@@ -246,7 +261,7 @@ class GatewayMiddleware:
             header_data, server_requirements, network = self._decode_and_resolve(
                 payment_header, price,
             )
-        except (ValueError, Exception) as e:
+        except Exception as e:
             return {
                 "status": 402,
                 "body": {"error": f"Invalid payment header: {e}"},
@@ -288,34 +303,10 @@ class GatewayMiddleware:
                 "body": {"error": "Payment settlement failed", "reason": settle_result.error_reason},
             }
 
-        amount = parse_usdc(price)
-        payload = header_data.get("payload", header_data)
-        authorization = payload.get("authorization", {})
-        payer = authorization.get("from", "")
-        value = str(authorization.get("value", amount))
-
-        response_headers = {
-            PAYMENT_RESPONSE_HEADER: encode_payment_response({
-                "success": settle_result.success,
-                "transaction": settle_result.transaction or "",
-                "payer": payer,
-                "network": network,
-            })
-        }
-
-        return PaymentInfo(
-            verified=True,
-            payer=payer,
-            amount=value,
-            network=network,
-            transaction=settle_result.transaction,
-            response_headers=response_headers,
-        )
+        return self._build_payment_info(header_data, settle_result, network, price)
 
     def _build_402_response(self, amount: str, path: str) -> Dict[str, Any]:
         """Build a 402 response body with one accepts entry per accepted network."""
-        from circlekit.constants import CIRCLE_BATCHING_NAME, CIRCLE_BATCHING_VERSION, CIRCLE_BATCHING_SCHEME, X402_VERSION
-
         accepts = []
         for network_id, cc in self._accepted_chains.items():
             accepts.append({
@@ -324,7 +315,7 @@ class GatewayMiddleware:
                 "asset": cc.usdc_address,
                 "amount": amount,
                 "payTo": self._config.seller_address,
-                "maxTimeoutSeconds": 345600,
+                "maxTimeoutSeconds": DEFAULT_MAX_TIMEOUT_SECONDS,
                 "extra": {
                     "name": CIRCLE_BATCHING_NAME,
                     "version": CIRCLE_BATCHING_VERSION,
@@ -345,6 +336,13 @@ class GatewayMiddleware:
     async def close(self):
         """Close the facilitator HTTP client."""
         await self._facilitator.close()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.close()
+        return False
 
 
 def create_gateway_middleware(

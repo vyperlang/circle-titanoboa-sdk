@@ -51,11 +51,8 @@ from circlekit.x402 import (
     X402Response,
     PaymentRequirements,
 )
-from circlekit.boa_utils import (
-    get_chain_config,
-    get_rpc_url,
-    CHAIN_CONFIGS,
-)
+from circlekit.constants import CHAIN_CONFIGS, get_chain_config
+from circlekit.boa_utils import get_rpc_url
 from circlekit.constants import (
     CIRCLE_BATCHING_NAME,
     CIRCLE_BATCHING_VERSION,

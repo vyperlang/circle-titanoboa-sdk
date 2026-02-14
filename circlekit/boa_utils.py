@@ -10,34 +10,14 @@ interactions. It handles:
 """
 
 from decimal import Decimal, ROUND_HALF_UP
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Optional, Tuple
 import os
 import json
 
 import boa
 from eth_account import Account
 
-from circlekit.constants import CHAIN_CONFIGS, CHAIN_ALIASES, ChainConfig
-
-
-def get_chain_config(chain: str) -> ChainConfig:
-    """
-    Get the configuration for a chain by name.
-
-    Args:
-        chain: Chain name (e.g., 'arcTestnet', 'baseSepolia', 'sepolia', 'mainnet')
-
-    Returns:
-        ChainConfig with RPC URL, addresses, etc.
-
-    Raises:
-        ValueError: If chain is not supported
-    """
-    resolved = CHAIN_ALIASES.get(chain, chain)
-    if resolved not in CHAIN_CONFIGS:
-        supported = ", ".join(list(CHAIN_CONFIGS.keys()) + list(CHAIN_ALIASES.keys()))
-        raise ValueError(f"Unsupported chain: {chain}. Supported: {supported}")
-    return CHAIN_CONFIGS[resolved]
+from circlekit.constants import USDC_DECIMALS, get_chain_config
 
 
 def get_rpc_url(chain: str) -> str:
@@ -247,63 +227,9 @@ GATEWAY_MINTER_ABI = json.loads("""[
 ]""")
 
 
-def load_usdc_contract(chain: str, rpc_url: Optional[str] = None):
-    """
-    Load the USDC contract for a chain using boa.
-
-    Args:
-        chain: Chain name
-        rpc_url: Optional custom RPC URL
-
-    Returns:
-        Contract object with USDC methods
-    """
-    config = get_chain_config(chain)
-    setup_boa_env(chain, rpc_url)
-
-    factory = boa.loads_abi(json.dumps(ERC20_ABI))
-    return factory.at(config.usdc_address)
-
-
-def load_gateway_contract(chain: str, rpc_url: Optional[str] = None):
-    """
-    Load the Gateway Wallet contract for a chain using boa.
-
-    Args:
-        chain: Chain name
-        rpc_url: Optional custom RPC URL
-
-    Returns:
-        Contract object with Gateway methods
-    """
-    config = get_chain_config(chain)
-    setup_boa_env(chain, rpc_url)
-
-    factory = boa.loads_abi(json.dumps(GATEWAY_WALLET_ABI))
-    return factory.at(config.gateway_address)
-
-
-def load_minter_contract(chain: str, rpc_url: Optional[str] = None):
-    """
-    Load the Gateway Minter contract for a chain using boa.
-
-    Args:
-        chain: Chain name
-        rpc_url: Optional custom RPC URL
-
-    Returns:
-        Contract object with gatewayMint method
-    """
-    config = get_chain_config(chain)
-    setup_boa_env(chain, rpc_url)
-
-    factory = boa.loads_abi(json.dumps(GATEWAY_MINTER_ABI))
-    return factory.at(config.gateway_minter)
-
-
 def format_usdc(amount: int) -> str:
     """Format a raw USDC amount (6 decimals) to a human-readable string."""
-    return f"{amount / 10**6:.6f}"
+    return f"{amount / 10**USDC_DECIMALS:.{USDC_DECIMALS}f}"
 
 
 def parse_usdc(amount: str) -> int:
@@ -314,7 +240,7 @@ def parse_usdc(amount: str) -> int:
     """
     if amount.startswith("$"):
         amount = amount[1:]
-    return int((Decimal(amount) * 10**6).quantize(1, ROUND_HALF_UP))
+    return int((Decimal(amount) * 10**USDC_DECIMALS).quantize(1, ROUND_HALF_UP))
 
 
 def generate_nonce() -> bytes:
@@ -330,16 +256,6 @@ def get_block_number(chain: str, rpc_url: Optional[str] = None) -> int:
     """
     setup_boa_env(chain, rpc_url)
     return boa.env.vm.state.block_number
-
-
-def get_block_timestamp(chain: str, rpc_url: Optional[str] = None) -> int:
-    """
-    Get the current block timestamp for a chain.
-
-    Uses titanoboa's RPC connection.
-    """
-    setup_boa_env(chain, rpc_url)
-    return boa.env.vm.state.timestamp
 
 
 # =============================================================================
@@ -400,7 +316,7 @@ def execute_approve(
         Transaction hash
     """
     config = get_chain_config(chain)
-    address, env = setup_boa_with_account(chain, private_key, rpc_url)
+    setup_boa_with_account(chain, private_key, rpc_url)
 
     factory = boa.loads_abi(json.dumps(ERC20_ABI))
     usdc = factory.at(config.usdc_address)
@@ -434,7 +350,7 @@ def execute_deposit(
         Transaction hash
     """
     config = get_chain_config(chain)
-    address, env = setup_boa_with_account(chain, private_key, rpc_url)
+    setup_boa_with_account(chain, private_key, rpc_url)
 
     factory = boa.loads_abi(json.dumps(GATEWAY_WALLET_ABI))
     gateway = factory.at(config.gateway_address)
@@ -479,7 +395,7 @@ def execute_gateway_mint(
         Transaction hash
     """
     config = get_chain_config(chain)
-    address, env = setup_boa_with_account(chain, private_key, rpc_url)
+    setup_boa_with_account(chain, private_key, rpc_url)
 
     factory = boa.loads_abi(json.dumps(GATEWAY_MINTER_ABI))
     minter = factory.at(config.gateway_minter)
@@ -585,7 +501,7 @@ def execute_initiate_withdrawal(
         Transaction hash
     """
     config = get_chain_config(chain)
-    address, env = setup_boa_with_account(chain, private_key, rpc_url)
+    setup_boa_with_account(chain, private_key, rpc_url)
 
     factory = boa.loads_abi(json.dumps(GATEWAY_WALLET_ABI))
     gateway = factory.at(config.gateway_address)
@@ -617,7 +533,7 @@ def execute_complete_withdrawal(
         Transaction hash
     """
     config = get_chain_config(chain)
-    address, env = setup_boa_with_account(chain, private_key, rpc_url)
+    setup_boa_with_account(chain, private_key, rpc_url)
 
     factory = boa.loads_abi(json.dumps(GATEWAY_WALLET_ABI))
     gateway = factory.at(config.gateway_address)
@@ -653,7 +569,7 @@ def execute_deposit_for(
         Transaction hash
     """
     config = get_chain_config(chain)
-    address, env = setup_boa_with_account(chain, private_key, rpc_url)
+    setup_boa_with_account(chain, private_key, rpc_url)
 
     factory = boa.loads_abi(json.dumps(GATEWAY_WALLET_ABI))
     gateway = factory.at(config.gateway_address)
