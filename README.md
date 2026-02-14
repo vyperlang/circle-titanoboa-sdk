@@ -7,13 +7,14 @@ Python SDK for [x402](https://github.com/coinbase/x402) with Circle Gateway batc
 ## Installation
 
 ```bash
-pip install -e .
+# As a dependency
+pip install .
 
 # With x402 integration
-pip install -e ".[x402]"
+pip install ".[x402]"
 
-# With dev dependencies
-pip install -e ".[dev]"
+# For development
+uv sync
 ```
 
 ## Getting Testnet USDC
@@ -307,21 +308,23 @@ response = httpx.get(url, headers={"PAYMENT-SIGNATURE": header})
 from circlekit.boa_utils import (
     setup_boa_env,
     setup_boa_with_account,
-    load_usdc_contract,
-    load_gateway_contract,
     get_usdc_balance,
     get_gateway_balance,
     execute_approve,
     execute_deposit,
 )
+from circlekit.constants import get_chain_config
 
 # Read-only setup
 setup_boa_env("arcTestnet")
-usdc = load_usdc_contract("arcTestnet")
+config = get_chain_config("arcTestnet")
+
+import boa
+usdc = boa.load_partial("path/to/IERC20.json").at(config.usdc_address)
 balance = usdc.balanceOf("0x...")
 
 # Transaction setup (adds signing account)
-address, env = setup_boa_with_account("arcTestnet", "0xPrivateKey...")
+setup_boa_with_account("arcTestnet", "0xPrivateKey...")
 # Now you can deploy/call Vyper contracts with real transactions
 ```
 
@@ -351,13 +354,32 @@ address, env = setup_boa_with_account("arcTestnet", "0xPrivateKey...")
 
 **Note:** Arc Testnet uses USDC as the native gas token. Gateway Domain IDs are Circle's internal domain identifiers, not chain IDs.
 
-## Testing
+## Development
+
+### Setup
 
 ```bash
-uv venv && source .venv/bin/activate
-uv pip install -e ".[dev]"
+uv sync                     # Install all deps including dev group
+uv run pre-commit install   # Set up pre-commit hooks
+```
 
-.venv/bin/pytest tests/ -v
+### Running Tests
+
+```bash
+uv run pytest               # Unit tests (192 tests)
+
+# E2E tests (requires testnet USDC):
+PRIVATE_KEY=0x... uv run pytest tests/test_e2e.py -v -s
+```
+
+### Linting & Type Checking
+
+Pre-commit runs automatically on `git commit`, or manually:
+
+```bash
+uv run ruff check --fix circlekit/ tests/   # Lint
+uv run ruff format circlekit/ tests/         # Format
+uv run mypy circlekit/                       # Type check
 ```
 
 ## Architecture
