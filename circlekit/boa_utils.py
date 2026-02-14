@@ -255,7 +255,8 @@ def get_block_number(chain: str, rpc_url: Optional[str] = None) -> int:
     Uses titanoboa's RPC connection.
     """
     setup_boa_env(chain, rpc_url)
-    return boa.env.vm.state.block_number
+    result: int = boa.env.vm.state.block_number
+    return result
 
 
 # =============================================================================
@@ -433,7 +434,8 @@ def check_allowance(
 
     factory = boa.loads_abi(json.dumps(ERC20_ABI))
     usdc = factory.at(config.usdc_address)
-    return usdc.allowance(owner, spender)
+    result: int = usdc.allowance(owner, spender)
+    return result
 
 
 def get_withdrawal_delay(
@@ -455,7 +457,8 @@ def get_withdrawal_delay(
     factory = boa.loads_abi(json.dumps(GATEWAY_WALLET_ABI))
     config = get_chain_config(chain)
     gateway = factory.at(config.gateway_address)
-    return gateway.withdrawalDelay()
+    result: int = gateway.withdrawalDelay()
+    return result
 
 
 def get_withdrawal_block(
@@ -479,7 +482,8 @@ def get_withdrawal_block(
 
     factory = boa.loads_abi(json.dumps(GATEWAY_WALLET_ABI))
     gateway = factory.at(config.gateway_address)
-    return gateway.withdrawalBlock(config.usdc_address, address)
+    result: int = gateway.withdrawalBlock(config.usdc_address, address)
+    return result
 
 
 def execute_initiate_withdrawal(
@@ -605,7 +609,8 @@ def get_usdc_balance(
 
     factory = boa.loads_abi(json.dumps(ERC20_ABI))
     usdc = factory.at(config.usdc_address)
-    return usdc.balanceOf(address)
+    result: int = usdc.balanceOf(address)
+    return result
 
 
 def get_gateway_balance(
@@ -629,4 +634,5 @@ def get_gateway_balance(
 
     factory = boa.loads_abi(json.dumps(GATEWAY_WALLET_ABI))
     gateway = factory.at(config.gateway_address)
-    return gateway.totalBalance(config.usdc_address, address)
+    result: int = gateway.totalBalance(config.usdc_address, address)
+    return result

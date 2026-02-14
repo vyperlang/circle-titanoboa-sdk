@@ -165,6 +165,7 @@ class GatewayClient:
     ):
         self._chain = chain
         self._rpc_url = rpc_url
+        self._tx_executor: Optional[TxExecutor]
 
         if private_key is not None:
             pk_signer = PrivateKeySigner(private_key)

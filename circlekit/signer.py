@@ -47,7 +47,7 @@ class PrivateKeySigner:
 
     @property
     def address(self) -> str:
-        return self._account.address
+        return str(self._account.address)
 
     def sign_typed_data(
         self,
@@ -83,4 +83,5 @@ class PrivateKeySigner:
         }
 
         signed = Account.sign_typed_data(self._private_key, full_message=full_message)
-        return "0x" + signed.signature.hex()
+        sig_hex: str = signed.signature.hex()
+        return "0x" + sig_hex

@@ -332,7 +332,7 @@ def encode_payment_response(settle_info: Dict) -> str:
     return base64.b64encode(json.dumps(settle_info).encode()).decode()
 
 
-def decode_payment_response(header: str) -> Dict:
+def decode_payment_response(header: str) -> Dict[str, Any]:
     """
     Decode a PAYMENT-RESPONSE header value.
 
@@ -343,7 +343,8 @@ def decode_payment_response(header: str) -> Dict:
         Decoded settlement receipt dict
     """
     decoded = base64.b64decode(header).decode()
-    return json.loads(decoded)
+    result: Dict[str, Any] = json.loads(decoded)
+    return result
 
 
 class BatchEvmScheme:
@@ -488,7 +489,8 @@ def decode_payment_header(header: str) -> Dict[str, Any]:
         Decoded payload dict
     """
     decoded = base64.b64decode(header).decode()
-    return json.loads(decoded)
+    result: Dict[str, Any] = json.loads(decoded)
+    return result
 
 
 def is_batch_payment(requirements: Union[Dict, PaymentRequirements]) -> bool:
@@ -507,7 +509,7 @@ def is_batch_payment(requirements: Union[Dict, PaymentRequirements]) -> bool:
         return requirements.is_gateway_batched
 
     extra = requirements.get("extra", {})
-    return (
+    return bool(
         extra.get("name") == CIRCLE_BATCHING_NAME
         and extra.get("version") == CIRCLE_BATCHING_VERSION
     )

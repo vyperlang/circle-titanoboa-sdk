@@ -24,8 +24,9 @@ def _to_dict(obj: Any) -> Dict[str, Any]:
     if isinstance(obj, dict):
         return obj
     if hasattr(obj, "model_dump"):
-        return obj.model_dump(by_alias=True)
-    return dict(obj)
+        result: Dict[str, Any] = obj.model_dump(by_alias=True)
+        return result
+    return dict(obj)  # type: ignore[return-value]
 
 
 @dataclass
@@ -110,28 +111,38 @@ class BatchFacilitatorClient:
         """
         if self._create_auth_headers is None:
             return {}
+
+        create_headers = self._create_auth_headers
+
+        async def _await_headers() -> Dict[str, Dict[str, str]]:
+            return await create_headers()
+
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            auth = asyncio.run(self._create_auth_headers())
+            auth: Dict[str, Dict[str, str]] = asyncio.run(_await_headers())
         else:
             # Inside an async context — run in a thread to avoid nested loop.
             from concurrent.futures import ThreadPoolExecutor
+
+            def _run() -> Dict[str, Dict[str, str]]:
+                return asyncio.run(_await_headers())
+
             with ThreadPoolExecutor(max_workers=1) as pool:
-                auth = pool.submit(asyncio.run, self._create_auth_headers()).result()
+                auth = pool.submit(_run).result()
         return auth.get(endpoint, {})
 
     async def verify(
         self,
-        payment_payload: Any,
-        payment_requirements: Any,
+        payload: Any,
+        requirements: Any,
     ) -> VerifyResponse:
         """
         Verify a payment payload against the Gateway API.
 
         Args:
-            payment_payload: The decoded payment payload (dict or Pydantic model)
-            payment_requirements: The payment requirements (dict or Pydantic model)
+            payload: The decoded payment payload (dict or Pydantic model)
+            requirements: The payment requirements (dict or Pydantic model)
 
         Returns:
             VerifyResponse with is_valid flag
@@ -139,8 +150,8 @@ class BatchFacilitatorClient:
         Raises:
             ValueError: If the API response is malformed
         """
-        payload_dict = _to_dict(payment_payload)
-        requirements_dict = _to_dict(payment_requirements)
+        payload_dict = _to_dict(payload)
+        requirements_dict = _to_dict(requirements)
 
         headers = await self._get_auth_headers("verify")
         response = await self._http.post(
@@ -165,15 +176,15 @@ class BatchFacilitatorClient:
 
     async def settle(
         self,
-        payment_payload: Any,
-        payment_requirements: Any,
+        payload: Any,
+        requirements: Any,
     ) -> SettleResponse:
         """
         Submit a payment for settlement via the Gateway API.
 
         Args:
-            payment_payload: The decoded payment payload (dict or Pydantic model)
-            payment_requirements: The payment requirements (dict or Pydantic model)
+            payload: The decoded payment payload (dict or Pydantic model)
+            requirements: The payment requirements (dict or Pydantic model)
 
         Returns:
             SettleResponse with transaction hash if successful
@@ -181,8 +192,8 @@ class BatchFacilitatorClient:
         Raises:
             ValueError: If the API response is malformed or missing expected fields
         """
-        payload_dict = _to_dict(payment_payload)
-        requirements_dict = _to_dict(payment_requirements)
+        payload_dict = _to_dict(payload)
+        requirements_dict = _to_dict(requirements)
 
         headers = await self._get_auth_headers("settle")
         response = await self._http.post(

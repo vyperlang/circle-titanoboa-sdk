@@ -48,7 +48,7 @@ def create_resource_server(url: Optional[str] = None, is_testnet: bool = True):
     from circlekit.constants import get_gateway_api_url
 
     client = BatchFacilitatorClient(url=url or get_gateway_api_url(is_testnet))
-    return x402ResourceServer(client)
+    return x402ResourceServer(client)  # type: ignore[arg-type]
 
 
 def register_batch_scheme(

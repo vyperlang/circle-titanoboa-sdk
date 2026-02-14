@@ -168,8 +168,8 @@ class GatewayMiddleware:
             payment_header, price,
         )
         return await self._facilitator.verify(
-            payment_payload=header_data,
-            payment_requirements=server_requirements,
+            payload=header_data,
+            requirements=server_requirements,
         )
 
     def _build_payment_info(
@@ -223,8 +223,8 @@ class GatewayMiddleware:
         )
 
         settle_result = await self._facilitator.settle(
-            payment_payload=header_data,
-            payment_requirements=server_requirements,
+            payload=header_data,
+            requirements=server_requirements,
         )
 
         if not settle_result.success:
@@ -270,8 +270,8 @@ class GatewayMiddleware:
         # Verify via Gateway API
         try:
             verify_result = await self._facilitator.verify(
-                payment_payload=header_data,
-                payment_requirements=server_requirements,
+                payload=header_data,
+                requirements=server_requirements,
             )
         except Exception as e:
             return {
@@ -288,8 +288,8 @@ class GatewayMiddleware:
         # Settle via Gateway API — block access on failure
         try:
             settle_result = await self._facilitator.settle(
-                payment_payload=header_data,
-                payment_requirements=server_requirements,
+                payload=header_data,
+                requirements=server_requirements,
             )
         except Exception as e:
             return {
