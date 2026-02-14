@@ -6,6 +6,14 @@ repos:
         args: [--fix]
       - id: ruff-format
 
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy
+        entry: uv run --no-sync mypy circlekit tests
+        language: system
+        pass_filenames: false
+
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
     hooks:
