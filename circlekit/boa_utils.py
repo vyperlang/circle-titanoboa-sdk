@@ -15,6 +15,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 import boa
+import httpx
 from eth_account import Account
 
 from circlekit.constants import USDC_DECIMALS, get_chain_config
@@ -254,9 +255,28 @@ def get_block_number(chain: str, rpc_url: str | None = None) -> int:
 
     Uses titanoboa's RPC connection.
     """
-    setup_boa_env(chain, rpc_url)
-    result: int = boa.env.vm.state.block_number
-    return result
+    config = get_chain_config(chain)
+    url = rpc_url or config.rpc_url
+
+    payload = {
+        "jsonrpc": "2.0",
+        "method": "eth_blockNumber",
+        "params": [],
+        "id": 1,
+    }
+    response = httpx.post(url, json=payload, timeout=30.0)
+    response.raise_for_status()
+    body = response.json()
+
+    if "error" in body:
+        err = body["error"]
+        msg = err.get("message", err) if isinstance(err, dict) else err
+        raise RuntimeError(f"RPC error from {url}: {msg}")
+
+    result = body.get("result")
+    if not result:
+        raise RuntimeError(f"RPC response missing 'result' field from {url}")
+    return int(result, 16)
 
 
 # =============================================================================

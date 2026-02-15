@@ -64,6 +64,9 @@ from circlekit.x402 import (
 
 # Default max fee for withdrawals: 2.01 USDC = 2_010_000 raw units
 DEFAULT_WITHDRAW_MAX_FEE = 2_010_000
+# Keep uint256 values JSON-safe for external typed-data validators that
+# may coerce large numbers through floating-point parsing.
+MAX_JSON_SAFE_UINT256 = 2**53 - 1
 
 T = TypeVar("T")
 
@@ -545,7 +548,7 @@ class GatewayClient:
         }
 
         # BurnIntent wraps TransferSpec
-        max_block_height = 2**256 - 1  # maxUint256
+        max_block_height = MAX_JSON_SAFE_UINT256
 
         # EIP-712 domain for withdrawal: {name: "GatewayWallet", version: "1"}
         # No chainId or verifyingContract — withdrawal signing domain is unscoped
@@ -642,14 +645,14 @@ class GatewayClient:
 
         response = await self._http.post(api_url, json=payload)
 
-        if response.status_code != 200:
+        if response.status_code < 200 or response.status_code >= 300:
             error_msg = response.text
             try:
                 error_data = response.json()
                 error_msg = error_data.get("error", error_msg)
             except Exception:
                 pass
-            raise ValueError(f"Withdrawal failed: {error_msg}")
+            raise ValueError(f"Withdrawal failed (status {response.status_code}): {error_msg}")
 
         result = response.json()
 
