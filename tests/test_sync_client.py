@@ -1,4 +1,4 @@
-"""Tests for GatewayClientSync — the synchronous wrapper around GatewayClient."""
+"""Tests for GatewayClientSync, the synchronous wrapper around GatewayClient."""
 
 import warnings
 from unittest.mock import AsyncMock, MagicMock

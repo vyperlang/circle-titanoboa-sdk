@@ -8,7 +8,7 @@ Usage:
 
     # Server-side:
     server = create_resource_server(is_testnet=True)
-    server.initialize()  # sync — fetches supported kinds from Gateway API
+    server.initialize()  # sync; fetches supported kinds from Gateway API
 
     # Client-side (register Circle batch scheme with x402 client):
     from x402.client import x402Client

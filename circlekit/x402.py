@@ -258,7 +258,7 @@ def get_payment_required(
     Extract payment requirements from a 402 response.
 
     Handles both v2 (header) and v1 (body) formats:
-    - If PAYMENT-REQUIRED header is present, decode it (strict — raises on malformed).
+    - If PAYMENT-REQUIRED header is present, decode it (strict; raises on malformed).
     - If header is absent, parse body but only accept x402Version == 1.
     - Otherwise raise ValueError.
 

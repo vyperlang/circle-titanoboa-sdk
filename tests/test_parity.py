@@ -184,7 +184,7 @@ class TestConstantsParity:
         assert CIRCLE_BATCHING_SCHEME == "exact"
 
     def test_chain_aliases(self):
-        """TS uses 'sepolia' and 'mainnet' — we should support both."""
+        """TS uses 'sepolia' and 'mainnet', so we should support both."""
         from circlekit.constants import get_chain_config
 
         sepolia = get_chain_config("sepolia")

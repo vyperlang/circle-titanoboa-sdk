@@ -4,6 +4,11 @@ Python SDK for [x402](https://github.com/coinbase/x402) with Circle Gateway batc
 
 > Built for the [Vyper](https://github.com/vyperlang/vyper) ecosystem.
 
+> **Note:** The pip package is `circle-titanoboa-sdk` but the Python import is `circlekit`:
+> ```python
+> from circlekit import GatewayClient
+> ```
+
 ## Installation
 
 ```bash
@@ -107,7 +112,7 @@ payments will be validated against the accepted set.
 If you already use the [`x402` Python package](https://github.com/coinbase/x402/tree/main/python), add Circle Gateway as a facilitator:
 
 ```bash
-pip install circlekit[x402]
+pip install ".[x402]"
 ```
 
 ```python
@@ -192,20 +197,20 @@ async def read_value(request: Request):
 ```python
 from circlekit import GatewayClient
 
-# Simple — private_key creates both a Signer and TxExecutor:
+# Simple: private_key creates both a Signer and TxExecutor:
 client = GatewayClient(
     chain="arcTestnet",
     private_key="0x...",
     rpc_url=None             # Optional custom RPC
 )
 
-# Pay-only — signer is enough for gasless payments:
+# Pay-only (signer is enough for gasless payments):
 from circlekit import PrivateKeySigner
 signer = PrivateKeySigner("0x...")
 client = GatewayClient(chain="arcTestnet", signer=signer)
 # client.pay() works; client.deposit()/withdraw() raise ValueError
 
-# Advanced — inject capabilities separately:
+# Advanced: inject capabilities separately:
 from circlekit import BoaTxExecutor
 client = GatewayClient(
     chain="arcTestnet",
@@ -224,7 +229,20 @@ result = await client.pay(url)                    # Pay for resource (gasless, n
 balances = await client.get_balances()            # Check balances (no capability needed)
 support = await client.supports(url)              # Check if URL accepts payments
 await client.deposit("10.0")                      # Deposit USDC to Gateway (needs TxExecutor)
+await client.deposit_for("10.0", depositor="0x...")  # Deposit on behalf of another address
 await client.withdraw("5.0", chain="baseSepolia") # Withdraw to another chain (needs both)
+```
+
+#### Trustless Withdrawal
+
+An alternative to `withdraw()` that doesn't require the Gateway API. Uses on-chain delay instead:
+
+```python
+delay = await client.get_trustless_withdrawal_delay()     # Delay in blocks
+await client.initiate_trustless_withdrawal("1.0")         # Start withdrawal
+# ... wait for delay blocks ...
+block = await client.get_trustless_withdrawal_block()     # Check eligible block
+result = await client.complete_trustless_withdrawal()     # Complete after delay
 ```
 
 #### TxExecutor
@@ -238,7 +256,39 @@ from circlekit import TxExecutor, BoaTxExecutor
 executor = BoaTxExecutor("0xPrivateKey...")
 
 # Custom implementations can wrap any execution backend (e.g., Circle
-# Programmable Wallets) — just implement the TxExecutor protocol.
+# Programmable Wallets). Just implement the TxExecutor protocol.
+```
+
+#### CircleWalletSigner / CircleTxExecutor
+
+Use Circle Developer-Controlled Wallets (MPC-backed) instead of a raw private key. No private key ever leaves Circle's infrastructure.
+
+```bash
+pip install ".[wallets]"
+```
+
+```python
+from circlekit import GatewayClient
+from circlekit.wallets import CircleWalletSigner, CircleTxExecutor
+
+signer = CircleWalletSigner(wallet_id="...", wallet_address="0x...")
+tx_executor = CircleTxExecutor(wallet_id="...", wallet_address="0x...")
+
+# CIRCLE_API_KEY and CIRCLE_ENTITY_SECRET are read from env vars automatically
+client = GatewayClient(chain="arcTestnet", signer=signer, tx_executor=tx_executor)
+```
+
+### GatewayClientSync
+
+Synchronous wrapper for scripts, CLIs, and Jupyter notebooks that cannot use `async`/`await`. Mirrors every `GatewayClient` method.
+
+```python
+from circlekit import GatewayClientSync
+
+client = GatewayClientSync(chain="arcTestnet", private_key="0x...")
+result = client.pay("https://api.example.com/premium")
+balances = client.get_balances()
+client.close()
 ```
 
 ### create_gateway_middleware
@@ -253,7 +303,7 @@ gateway = create_gateway_middleware(
     description="My API",       # Description in 402 response
 )
 
-# Framework-agnostic — use process_request() in any handler:
+# Framework-agnostic. Use process_request() in any handler:
 result = await gateway.process_request(
     payment_header=request.headers.get("PAYMENT-SIGNATURE"),
     path=request.url.path,
@@ -261,17 +311,46 @@ result = await gateway.process_request(
 )
 
 if isinstance(result, dict):
-    # 402 response — set PAYMENT-REQUIRED header
+    # 402 response: set PAYMENT-REQUIRED header
     resp = JSONResponse(result["body"], status_code=result["status"])
     for k, v in result.get("headers", {}).items():
         resp.headers[k] = v
     return resp
 else:
-    # PaymentInfo — set PAYMENT-RESPONSE header
+    # PaymentInfo: set PAYMENT-RESPONSE header
     resp = JSONResponse({"data": "..."})
     for k, v in result.response_headers.items():
         resp.headers[k] = v
     return resp
+```
+
+The returned `GatewayMiddleware` also exposes lower-level methods for custom flows:
+
+```python
+# Build a 402 response manually:
+payment_required = gateway.require("$0.01", "/api/analyze")
+
+# Verify a payment without settling:
+verify_result = await gateway.verify(payment_header, "$0.01")
+
+# Settle a verified payment:
+payment_info = await gateway.settle(payment_header, "$0.01")
+```
+
+### BatchEvmScheme
+
+Creates EIP-712 `TransferWithAuthorization` payment payloads for the Gateway batching protocol.
+
+```python
+from circlekit import BatchEvmScheme, PrivateKeySigner
+
+scheme = BatchEvmScheme()
+signer = PrivateKeySigner("0x...")
+payload = scheme.create_payment_payload(
+    x402_version=2,
+    requirements=requirements,
+    signer=signer,
+)
 ```
 
 ### Low-Level x402 Functions
@@ -280,6 +359,7 @@ else:
 from circlekit.x402 import (
     parse_402_response,
     create_payment_header,
+    decode_payment_header,
     is_batch_payment,
     get_verifying_contract,
 )
@@ -297,6 +377,9 @@ if is_batch_payment(requirements):
 # Create payment signature
 signer = PrivateKeySigner("0x...")
 header = create_payment_header(signer=signer, requirements=requirements)
+
+# Decode an existing payment header
+payload = decode_payment_header(header)
 
 # Retry with payment
 response = httpx.get(url, headers={"PAYMENT-SIGNATURE": header})
@@ -339,7 +422,7 @@ setup_boa_with_account("arcTestnet", "0xPrivateKey...")
 | HyperEVM Testnet | 998 | 19 | Testnet |
 | Sonic Testnet | 64165 | 13 | Testnet |
 | World Chain Sepolia | 4801 | 14 | Testnet |
-| Sei Atlantic | 1328 | 16 | Testnet |
+| Sei Atlantic Testnet | 1328 | 16 | Testnet |
 | Ethereum | 1 | 0 | Mainnet |
 | Base | 8453 | 6 | Mainnet |
 | Arbitrum | 42161 | 3 | Mainnet |
@@ -394,10 +477,13 @@ circlekit/
 ├── boa_utils.py           # titanoboa helpers, contract ABIs, transactions
 ├── x402.py                # x402 protocol (parse 402, create signatures, headers)
 ├── x402_integration.py    # Optional x402 package integration
+├── key_utils.py           # Private key normalization, PrivateKeyLike type
+├── wallets.py             # Circle Developer-Controlled Wallets adapters
+├── sync_client.py         # GatewayClientSync (synchronous wrapper)
 ├── client.py              # GatewayClient (pay, deposit, withdraw, balances)
 └── server.py              # Framework-agnostic payment middleware
 ```
 
 ## License
 
-TBD
+MIT

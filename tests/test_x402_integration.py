@@ -113,7 +113,7 @@ class TestProtocolStructuralMatch:
 
         from circlekit.facilitator import BatchFacilitatorClient
 
-        # Protocol check — structural typing
+        # Protocol check (structural typing)
         # We can't use isinstance with Protocol unless it's @runtime_checkable,
         # so just verify the methods exist with correct signatures
         client = BatchFacilitatorClient()
@@ -319,7 +319,7 @@ class TestGetSupported:
             )
 
     def test_get_supported_is_sync(self):
-        """get_supported must be sync — x402's initialize() calls it synchronously."""
+        """get_supported must be sync because x402's initialize() calls it synchronously."""
         import inspect
 
         from circlekit.facilitator import BatchFacilitatorClient

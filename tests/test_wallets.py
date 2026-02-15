@@ -1,7 +1,7 @@
 """
-Tests for circlekit.wallets — CircleWalletSigner and CircleTxExecutor adapters.
+Tests for circlekit.wallets: CircleWalletSigner and CircleTxExecutor adapters.
 
-All tests mock the Circle SDK — no live API calls.
+All tests mock the Circle SDK. No live API calls.
 
 Run with: uv run pytest tests/test_wallets.py -v
 """
@@ -59,7 +59,7 @@ class _FakeContractExecutionRequest:
 
 
 class _FakeAbiParametersInner:
-    """Stand-in for AbiParametersInner — stores a plain value (str/int/bool/list)."""
+    """Stand-in for AbiParametersInner. Stores a plain value (str/int/bool/list)."""
 
     def __init__(self, value):
         self.actual_instance = value
@@ -725,7 +725,7 @@ class TestCircleTxExecutorSubmitAndWait:
         mock_tx = circle_mocks["transactions_api"]
 
         _mock_submit_response(mock_tx)
-        # Always return PENDING — never reaches terminal
+        # Always return PENDING, never reaches terminal
         _mock_poll_response(mock_tx, "PENDING")
 
         with pytest.raises(CircleTransactionTimeoutError) as exc_info:

@@ -126,7 +126,7 @@ class BatchFacilitatorClient:
         except RuntimeError:
             auth: dict[str, dict[str, str]] = asyncio.run(_await_headers())
         else:
-            # Inside an async context — run in a thread to avoid nested loop.
+            # Inside an async context, so run in a thread to avoid nested loop.
             from concurrent.futures import ThreadPoolExecutor
 
             def _run() -> dict[str, dict[str, str]]:

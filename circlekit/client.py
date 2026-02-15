@@ -171,7 +171,7 @@ class GatewayClient:
         signer: Signer instance for EIP-712 signing (pay, withdraw intent)
         tx_executor: TxExecutor instance for onchain transactions (deposit, withdraw mint)
         rpc_url: Optional custom RPC URL
-        private_key: Convenience shorthand — creates both PrivateKeySigner + BoaTxExecutor.
+        private_key: Convenience shorthand that creates both PrivateKeySigner + BoaTxExecutor.
             Also accepts a ``LocalAccount`` object.  Falls back to the
             ``CIRCLE_SDK_PRIVATE_KEY`` environment variable when both
             *private_key* and *signer* are ``None``.
@@ -215,7 +215,7 @@ class GatewayClient:
 
         # Guard against signer/tx_executor address divergence.
         # If the executor exposes an address (e.g. BoaTxExecutor), the two
-        # must agree — otherwise intents are signed for one account while
+        # must agree, otherwise intents are signed for one account while
         # onchain txs execute from another.
         if self._tx_executor is not None:
             executor_addr = getattr(self._tx_executor, "address", None)
@@ -346,7 +346,7 @@ class GatewayClient:
         """
         Create a signed payment payload for the given requirements.
 
-        This is a lower-level primitive — most callers should use pay() instead,
+        This is a lower-level primitive. Most callers should use pay() instead,
         which handles the full 402 negotiation automatically.
 
         Args:
@@ -557,7 +557,7 @@ class GatewayClient:
         max_block_height = MAX_JSON_SAFE_UINT256
 
         # EIP-712 domain for withdrawal: {name: "GatewayWallet", version: "1"}
-        # No chainId or verifyingContract — withdrawal signing domain is unscoped
+        # No chainId or verifyingContract; withdrawal signing domain is unscoped
         domain = {
             "name": "GatewayWallet",
             "version": "1",
@@ -688,7 +688,7 @@ class GatewayClient:
             )
 
         # Execute gatewayMint on the destination chain.
-        # Don't pass self._rpc_url — it's for the source chain. The destination
+        # Don't pass self._rpc_url; it's for the source chain. The destination
         # chain's TxExecutor/boa_utils will use its own default RPC.
         loop = asyncio.get_event_loop()
         mint_tx_hash = await loop.run_in_executor(

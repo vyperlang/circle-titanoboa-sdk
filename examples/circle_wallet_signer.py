@@ -3,8 +3,8 @@
 Circle Wallet Signer Example
 
 Demonstrates gasless payments using Circle Developer-Controlled Wallets
-instead of a raw private key. The signing happens via Circle's MPC API —
-no private key ever leaves Circle's infrastructure.
+instead of a raw private key. The signing happens via Circle's MPC API,
+so no private key ever leaves Circle's infrastructure.
 
 Prerequisites:
     pip install circle-titanoboa-sdk[wallets]
@@ -48,7 +48,7 @@ async def main():
     # CIRCLE_API_KEY and CIRCLE_ENTITY_SECRET are read from env vars automatically
     signer = CircleWalletSigner(
         wallet_id=WALLET_ID,
-        wallet_address=WALLET_ADDRESS,  # optional — fetched from API if omitted
+        wallet_address=WALLET_ADDRESS,  # optional, fetched from API if omitted
     )
     print(f"Signer: {signer}")
 
@@ -62,7 +62,7 @@ async def main():
 
         # Pay for a resource (gasless!)
         result = await client.pay(f"{SERVER_URL}/api/analyze")
-        print(f"Paid {result.formatted_amount} USDC — status: {result.status}")
+        print(f"Paid {result.formatted_amount} USDC (status: {result.status})")
 
 
 if __name__ == "__main__":
