@@ -25,6 +25,7 @@ Usage:
 import asyncio
 import os
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Generic, TypeVar
@@ -233,6 +234,11 @@ class GatewayClient:
         # Gateway API URL
         self._gateway_api = get_gateway_api_url(self._config.is_testnet)
 
+        # Use a dedicated single-thread executor for all blocking tx/boa calls.
+        # titanoboa caches can be thread-affine (sqlite-backed), so hopping
+        # across worker threads causes intermittent ProgrammingError.
+        self._blocking_executor = ThreadPoolExecutor(max_workers=1)
+
     @property
     def address(self) -> str:
         """The account's wallet address."""
@@ -294,7 +300,7 @@ class GatewayClient:
         if not skip_approval_check:
             # Step 1: Check current allowance
             current_allowance = await loop.run_in_executor(
-                None,
+                self._blocking_executor,
                 self._tx_executor.check_allowance,
                 self._chain,
                 self.address,
@@ -305,7 +311,7 @@ class GatewayClient:
             # Step 2: Approve if needed
             if current_allowance < amount_raw:
                 approval_tx_hash = await loop.run_in_executor(
-                    None,
+                    self._blocking_executor,
                     self._tx_executor.execute_approve,
                     self._chain,
                     self.address,
@@ -316,7 +322,7 @@ class GatewayClient:
 
         # Step 3: Execute deposit
         deposit_tx_hash = await loop.run_in_executor(
-            None,
+            self._blocking_executor,
             self._tx_executor.execute_deposit,
             self._chain,
             self.address,
@@ -686,7 +692,7 @@ class GatewayClient:
         # chain's TxExecutor/boa_utils will use its own default RPC.
         loop = asyncio.get_event_loop()
         mint_tx_hash = await loop.run_in_executor(
-            None,
+            self._blocking_executor,
             self._tx_executor.execute_gateway_mint,
             dest_chain,
             attestation,
@@ -930,7 +936,7 @@ class GatewayClient:
         if not skip_approval_check:
             # Step 1: Check current allowance
             current_allowance = await loop.run_in_executor(
-                None,
+                self._blocking_executor,
                 self._tx_executor.check_allowance,
                 self._chain,
                 self.address,
@@ -941,7 +947,7 @@ class GatewayClient:
             # Step 2: Approve if needed
             if current_allowance < amount_raw:
                 approval_tx_hash = await loop.run_in_executor(
-                    None,
+                    self._blocking_executor,
                     self._tx_executor.execute_approve,
                     self._chain,
                     self.address,
@@ -952,7 +958,7 @@ class GatewayClient:
 
         # Step 3: Execute depositFor
         deposit_tx_hash = await loop.run_in_executor(
-            None,
+            self._blocking_executor,
             self._tx_executor.execute_deposit_for,
             self._chain,
             self.address,
@@ -980,7 +986,7 @@ class GatewayClient:
         """
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(
-            None,
+            self._blocking_executor,
             _boa_get_withdrawal_delay,
             self._chain,
             self._rpc_url,
@@ -1001,7 +1007,7 @@ class GatewayClient:
         address = address or self.address
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(
-            None,
+            self._blocking_executor,
             _boa_get_withdrawal_block,
             self._chain,
             address,
@@ -1039,7 +1045,7 @@ class GatewayClient:
 
         loop = asyncio.get_event_loop()
         tx_hash = await loop.run_in_executor(
-            None,
+            self._blocking_executor,
             self._tx_executor.execute_initiate_withdrawal,
             self._chain,
             self.address,
@@ -1082,7 +1088,7 @@ class GatewayClient:
             if withdrawal_block == 0:
                 raise ValueError("No withdrawal has been initiated.")
             current_block = await loop.run_in_executor(
-                None,
+                self._blocking_executor,
                 _boa_get_block_number,
                 self._chain,
                 self._rpc_url,
@@ -1092,7 +1098,7 @@ class GatewayClient:
                 f"withdrawal block: {withdrawal_block}."
             )
         tx_hash = await loop.run_in_executor(
-            None,
+            self._blocking_executor,
             self._tx_executor.execute_complete_withdrawal,
             self._chain,
             self.address,
@@ -1136,6 +1142,7 @@ class GatewayClient:
     async def close(self):
         """Close the HTTP client."""
         await self._http.aclose()
+        self._blocking_executor.shutdown(wait=False, cancel_futures=True)
 
     async def __aenter__(self):
         return self
