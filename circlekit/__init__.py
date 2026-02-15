@@ -36,8 +36,18 @@ __version__ = "0.1.0"
 __author__ = "circlekit contributors"
 
 # Re-export main classes for convenience
-from circlekit.boa_utils import get_rpc_url
-from circlekit.client import GatewayClient, TrustlessWithdrawalResult
+from circlekit.boa_utils import format_usdc, get_rpc_url, parse_usdc
+from circlekit.client import (
+    Balances,
+    DepositResult,
+    GatewayBalance,
+    GatewayClient,
+    PayResult,
+    SupportsResult,
+    TrustlessWithdrawalResult,
+    WalletBalance,
+    WithdrawResult,
+)
 from circlekit.constants import (
     CHAIN_CONFIGS,
     CIRCLE_BATCHING_NAME,
@@ -70,6 +80,13 @@ __all__ = [
     "GatewayClient",
     "GatewayClientSync",
     "TrustlessWithdrawalResult",
+    "DepositResult",
+    "PayResult",
+    "WithdrawResult",
+    "WalletBalance",
+    "GatewayBalance",
+    "Balances",
+    "SupportsResult",
     # Server
     "create_gateway_middleware",
     # Key utilities
@@ -96,6 +113,9 @@ __all__ = [
     "get_chain_config",
     "get_rpc_url",
     "CHAIN_CONFIGS",
+    # USDC formatting
+    "format_usdc",
+    "parse_usdc",
     # Constants
     "CIRCLE_BATCHING_NAME",
     "CIRCLE_BATCHING_VERSION",

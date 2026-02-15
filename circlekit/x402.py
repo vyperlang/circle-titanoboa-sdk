@@ -390,11 +390,17 @@ class BatchEvmScheme:
         }
 
         # EIP-712 domain is GatewayWalletBatched, NOT USDC domain
+        verifying_contract = requirements.extra.get("verifyingContract")
+        if not verifying_contract:
+            raise ValueError(
+                "Payment requirements missing 'verifyingContract' in extra field"
+            )
+
         domain = {
             "name": CIRCLE_BATCHING_NAME,
             "version": CIRCLE_BATCHING_VERSION,
             "chainId": requirements.chain_id,
-            "verifyingContract": requirements.extra["verifyingContract"],
+            "verifyingContract": verifying_contract,
         }
 
         types = {

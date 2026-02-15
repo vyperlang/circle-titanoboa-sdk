@@ -167,6 +167,9 @@ class BatchFacilitatorClient:
             },
         )
 
+        if not (200 <= response.status_code < 300):
+            raise ValueError(f"Gateway verify failed ({response.status_code}): {response.text}")
+
         data = response.json()
         if isinstance(data, dict) and "isValid" in data:
             return VerifyResponse(
@@ -174,7 +177,7 @@ class BatchFacilitatorClient:
                 payer=data.get("payer"),
                 invalid_reason=data.get("invalidReason"),
             )
-        raise ValueError(f"Gateway verify failed ({response.status_code}): {data}")
+        raise ValueError(f"Gateway verify returned unexpected response: {data}")
 
     async def settle(
         self,
@@ -207,6 +210,9 @@ class BatchFacilitatorClient:
             },
         )
 
+        if not (200 <= response.status_code < 300):
+            raise ValueError(f"Gateway settle failed ({response.status_code}): {response.text}")
+
         data = response.json()
         if isinstance(data, dict) and "success" in data:
             return SettleResponse(
@@ -216,7 +222,7 @@ class BatchFacilitatorClient:
                 payer=data.get("payer"),
                 network=requirements_dict.get("network"),
             )
-        raise ValueError(f"Gateway settle failed ({response.status_code}): {data}")
+        raise ValueError(f"Gateway settle returned unexpected response: {data}")
 
     def get_supported(self) -> SupportedResponse:
         """

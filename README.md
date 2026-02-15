@@ -344,12 +344,11 @@ Creates EIP-712 `TransferWithAuthorization` payment payloads for the Gateway bat
 ```python
 from circlekit import BatchEvmScheme, PrivateKeySigner
 
-scheme = BatchEvmScheme()
 signer = PrivateKeySigner("0x...")
+scheme = BatchEvmScheme(signer)
 payload = scheme.create_payment_payload(
     x402_version=2,
     requirements=requirements,
-    signer=signer,
 )
 ```
 
@@ -436,6 +435,14 @@ setup_boa_with_account("arcTestnet", "0xPrivateKey...")
 | Sei | 1329 | 16 | Mainnet |
 
 **Note:** Arc Testnet uses USDC as the native gas token. Gateway Domain IDs are Circle's internal domain identifiers, not chain IDs.
+
+## Known Limitations
+
+### titanoboa threading
+
+titanoboa uses a global `boa.env` singleton with a SQLite-backed cache that is not thread-safe. `GatewayClient` mitigates this by routing all blocking boa calls through a single-thread `ThreadPoolExecutor`, but you should avoid creating multiple `GatewayClient` instances that call `deposit()`, `withdraw()`, or other on-chain methods concurrently in the same process. Gasless operations (`pay()`, `get_balances()`, `supports()`) use only HTTP and are safe to call concurrently.
+
+If you need concurrent on-chain operations, run each in a separate process or use `GatewayClientSync` in separate threads with independent boa environments.
 
 ## Development
 

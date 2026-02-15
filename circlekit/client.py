@@ -239,6 +239,8 @@ class GatewayClient:
         # across worker threads causes intermittent ProgrammingError.
         self._blocking_executor = ThreadPoolExecutor(max_workers=1)
 
+        self._closed = False
+
     @property
     def address(self) -> str:
         """The account's wallet address."""
@@ -286,6 +288,8 @@ class GatewayClient:
             raise ValueError("deposit() requires a tx_executor or private_key")
 
         amount_raw = parse_usdc(amount)
+        if amount_raw <= 0:
+            raise ValueError(f"Amount must be positive, got: {amount}")
         approve_raw = parse_usdc(approve_amount) if approve_amount else amount_raw
 
         # Preflight: check wallet USDC balance
@@ -295,7 +299,7 @@ class GatewayClient:
 
         approval_tx_hash: str | None = None
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         if not skip_approval_check:
             # Step 1: Check current allowance
@@ -513,6 +517,8 @@ class GatewayClient:
         max_fee = max_fee if max_fee is not None else DEFAULT_WITHDRAW_MAX_FEE
 
         amount_raw = parse_usdc(amount)
+        if amount_raw <= 0:
+            raise ValueError(f"Amount must be positive, got: {amount}")
 
         # Preflight: check gateway balance
         balances = await self.get_gateway_balance()
@@ -690,7 +696,7 @@ class GatewayClient:
         # Execute gatewayMint on the destination chain.
         # Don't pass self._rpc_url; it's for the source chain. The destination
         # chain's TxExecutor/boa_utils will use its own default RPC.
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         mint_tx_hash = await loop.run_in_executor(
             self._blocking_executor,
             self._tx_executor.execute_gateway_mint,
@@ -931,7 +937,7 @@ class GatewayClient:
 
         approval_tx_hash: str | None = None
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         if not skip_approval_check:
             # Step 1: Check current allowance
@@ -984,7 +990,7 @@ class GatewayClient:
         Returns:
             Withdrawal delay in blocks
         """
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             self._blocking_executor,
             _boa_get_withdrawal_delay,
@@ -1005,7 +1011,7 @@ class GatewayClient:
             Block number (0 if no pending withdrawal)
         """
         address = address or self.address
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             self._blocking_executor,
             _boa_get_withdrawal_block,
@@ -1035,6 +1041,8 @@ class GatewayClient:
             )
 
         amount_raw = parse_usdc(amount)
+        if amount_raw <= 0:
+            raise ValueError(f"Amount must be positive, got: {amount}")
 
         # Preflight: check gateway balance
         balances = await self.get_gateway_balance()
@@ -1043,7 +1051,7 @@ class GatewayClient:
                 f"Insufficient available balance. Have: {balances.formatted_available}, Need: {amount}"
             )
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         tx_hash = await loop.run_in_executor(
             self._blocking_executor,
             self._tx_executor.execute_initiate_withdrawal,
@@ -1079,7 +1087,7 @@ class GatewayClient:
                 "complete_trustless_withdrawal() requires a tx_executor or private_key"
             )
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         # Preflight: check that there's something withdrawable
         balances = await self.get_gateway_balance()
@@ -1140,7 +1148,10 @@ class GatewayClient:
         return await self.withdraw(amount, chain=destination_chain, recipient=recipient)
 
     async def close(self):
-        """Close the HTTP client."""
+        """Close the HTTP client and thread pool executor."""
+        if self._closed:
+            return
+        self._closed = True
         await self._http.aclose()
         self._blocking_executor.shutdown(wait=False, cancel_futures=True)
 
