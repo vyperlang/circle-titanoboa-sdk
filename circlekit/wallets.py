@@ -102,7 +102,7 @@ class CircleWalletSigner:
         else:
             # SDK returns WalletResponse with .data.wallet structure
             response = self._wallets_api.get_wallet(id=wallet_id)
-            self._address = response.data.wallet.address
+            self._address = _extract_wallet_address(response)
 
     def __repr__(self) -> str:
         return f"CircleWalletSigner(wallet_id={self._wallet_id!r}, address={self._address})"
@@ -185,6 +185,25 @@ def _normalize_to_hex(v: str | bytes) -> str:
     if len(s) <= 2:
         raise ValueError("Expected non-empty hex string")
     return s
+
+
+def _extract_wallet_address(wallet_response: Any) -> str:
+    """Extract wallet address from SDK response across model-shape variants."""
+    data = getattr(wallet_response, "data", None)
+    wallet = getattr(data, "wallet", None)
+    if wallet is None:
+        raise RuntimeError("Circle wallet response missing wallet data")
+
+    address = getattr(wallet, "address", None)
+    if isinstance(address, str) and address:
+        return address
+
+    actual = getattr(wallet, "actual_instance", None)
+    address = getattr(actual, "address", None)
+    if isinstance(address, str) and address:
+        return address
+
+    raise RuntimeError("Circle wallet response missing wallet address")
 
 
 # ---------------------------------------------------------------------------
@@ -271,7 +290,7 @@ class CircleTxExecutor:
             self._address = wallet_address
         else:
             response = self._wallets_api.get_wallet(id=wallet_id)
-            self._address = response.data.wallet.address
+            self._address = _extract_wallet_address(response)
 
         self._http = httpx.Client()
 
@@ -314,12 +333,28 @@ class CircleTxExecutor:
         )
 
         response = self._transactions_api.create_developer_transaction_contract_execution(request)
-        tx_id = response.data.transaction.id
+        data = getattr(response, "data", None)
+        # Circle SDK model shape varies by version:
+        # - Newer: response.data.id
+        # - Older: response.data.transaction.id
+        tx_id = getattr(data, "id", None)
+        if not isinstance(tx_id, str) or not tx_id:
+            tx = getattr(data, "transaction", None)
+            tx_id = getattr(tx, "id", None)
+        if not isinstance(tx_id, str) or not tx_id:
+            raise RuntimeError("Circle transaction submit response missing transaction id")
 
         deadline = time.monotonic() + self._timeout
         while True:
             poll = self._transactions_api.get_transaction(id=tx_id)
-            tx = poll.data.transaction
+            poll_data = getattr(poll, "data", None)
+            tx = getattr(poll_data, "transaction", None)
+            # Defensive compatibility path: if SDK flattens transaction fields
+            # into `data`, treat `data` itself as the transaction object.
+            if tx is None and poll_data is not None and hasattr(poll_data, "state"):
+                tx = poll_data
+            if tx is None:
+                raise RuntimeError("Circle transaction poll response missing transaction data")
             state = tx.state
 
             if state in _SUCCESS_STATES:

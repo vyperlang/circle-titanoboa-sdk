@@ -294,6 +294,24 @@ class TestCircleWalletSignerInit:
         mock_wallets_api.get_wallet.assert_called_once_with(id=FAKE_WALLET_ID)
         assert signer.address == FAKE_ADDRESS
 
+    def test_fetches_address_from_api_actual_instance_wrapper(self, circle_mocks):
+        """Supports oneOf wrapper shape where wallet address is in actual_instance."""
+        mock_wallets_api = circle_mocks["wallets_api"]
+
+        wallet_obj = SimpleNamespace(actual_instance=SimpleNamespace(address=FAKE_ADDRESS))
+        response = SimpleNamespace(data=SimpleNamespace(wallet=wallet_obj))
+        mock_wallets_api.get_wallet.return_value = response
+
+        from circlekit.wallets import CircleWalletSigner
+
+        signer = CircleWalletSigner(
+            wallet_id=FAKE_WALLET_ID,
+            api_key=FAKE_API_KEY,
+            entity_secret=FAKE_ENTITY_SECRET,
+        )
+
+        assert signer.address == FAKE_ADDRESS
+
     def test_uses_provided_address(self, circle_mocks):
         """When wallet_address is provided, skip the API call."""
         signer = _make_signer(circle_mocks, wallet_address=FAKE_ADDRESS)
@@ -416,6 +434,14 @@ def _mock_submit_response(mock_transactions_api, tx_id=FAKE_TX_ID):
     mock_transactions_api.create_developer_transaction_contract_execution.return_value = response
 
 
+def _mock_submit_response_flat_data(mock_transactions_api, tx_id=FAKE_TX_ID):
+    """Configure mock submit response using newer SDK shape: response.data.id."""
+    response = MagicMock()
+    response.data.id = tx_id
+    response.data.transaction = None
+    mock_transactions_api.create_developer_transaction_contract_execution.return_value = response
+
+
 def _mock_poll_response(mock_transactions_api, state, tx_hash=FAKE_TX_HASH, error_reason=None):
     """Configure mock TransactionsApi.get_transaction to return given state."""
     response = MagicMock()
@@ -487,6 +513,24 @@ class TestCircleTxExecutorInit:
         )
 
         mock_wallets_api.get_wallet.assert_called_once_with(id=FAKE_WALLET_ID)
+        assert executor.address == FAKE_ADDRESS
+
+    def test_fetches_address_from_api_actual_instance_wrapper(self, circle_mocks):
+        """Supports oneOf wrapper shape where wallet address is in actual_instance."""
+        mock_wallets_api = circle_mocks["wallets_api"]
+
+        wallet_obj = SimpleNamespace(actual_instance=SimpleNamespace(address=FAKE_ADDRESS))
+        response = SimpleNamespace(data=SimpleNamespace(wallet=wallet_obj))
+        mock_wallets_api.get_wallet.return_value = response
+
+        from circlekit.wallets import CircleTxExecutor
+
+        executor = CircleTxExecutor(
+            wallet_id=FAKE_WALLET_ID,
+            api_key=FAKE_API_KEY,
+            entity_secret=FAKE_ENTITY_SECRET,
+        )
+
         assert executor.address == FAKE_ADDRESS
 
     def test_uses_provided_address(self, circle_mocks):
@@ -603,6 +647,33 @@ class TestCircleTxExecutorSubmitAndWait:
         _mock_poll_response(mock_tx, "CLEARED", tx_hash=FAKE_TX_HASH)
 
         result = executor._submit_and_wait("0xContract", "baz()", [])
+        assert result == FAKE_TX_HASH
+
+    def test_submit_response_with_flat_data_shape(self, circle_mocks):
+        """Supports newer Circle SDK response shape where tx id is response.data.id."""
+        executor = _make_executor(circle_mocks)
+        mock_tx = circle_mocks["transactions_api"]
+
+        _mock_submit_response_flat_data(mock_tx)
+        _mock_poll_response(mock_tx, "CONFIRMED", tx_hash=FAKE_TX_HASH)
+
+        result = executor._submit_and_wait("0xContract", "foo(uint256)", ["42"])
+        assert result == FAKE_TX_HASH
+
+    def test_poll_response_with_flat_data_shape(self, circle_mocks):
+        """Supports poll shape where transaction fields are directly under response.data."""
+        executor = _make_executor(circle_mocks)
+        mock_tx = circle_mocks["transactions_api"]
+
+        _mock_submit_response(mock_tx)
+        poll = MagicMock()
+        poll.data.transaction = None
+        poll.data.state = "CONFIRMED"
+        poll.data.tx_hash = FAKE_TX_HASH
+        poll.data.error_reason = None
+        mock_tx.get_transaction.return_value = poll
+
+        result = executor._submit_and_wait("0xContract", "foo(uint256)", ["42"])
         assert result == FAKE_TX_HASH
 
     def test_failure_failed_state(self, circle_mocks):
