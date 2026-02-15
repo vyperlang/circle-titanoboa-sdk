@@ -247,7 +247,7 @@ class CircleTxExecutor:
     submitting contract-execution transactions via Circle's API and polling
     until they reach a terminal state.
 
-    No private key material is ever exposed — all transactions are executed
+    No private key material is ever exposed. All transactions are executed
     by Circle's MPC infrastructure.
     """
 
@@ -313,7 +313,7 @@ class CircleTxExecutor:
 
         Parameters are positional plain values matching the types declared in
         abi_function_signature.  The Circle API infers types from the
-        signature, so each element is just the value itself — e.g.
+        signature, so each element is just the value itself, e.g.
         ``["0xAddress", "1000000"]`` for ``approve(address,uint256)``.
 
         All callers in this class pre-stringify values; the annotation is

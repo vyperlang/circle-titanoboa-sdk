@@ -52,7 +52,7 @@ class GatewayClientSync:
         private_key: PrivateKeyLike | None = None,
     ):
         # Spin up a dedicated event loop on a daemon thread so that all async
-        # work — including the httpx.AsyncClient — is bound to a single loop.
+        # work (including the httpx.AsyncClient) is bound to a single loop.
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._loop.run_forever, daemon=True)
         self._thread.start()

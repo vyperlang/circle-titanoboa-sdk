@@ -64,6 +64,7 @@ Thumbs.db
 node_modules/
 package.json
 package-lock.json
+.npmrc
 
 # Circle recovery files (NEVER commit these!)
 recovery_file*.dat

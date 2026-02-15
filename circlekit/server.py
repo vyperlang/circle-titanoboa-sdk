@@ -1,7 +1,7 @@
 """
 Server-side middleware for accepting Circle Gateway payments.
 
-Framework-agnostic — exposes a process_request() method that takes
+Framework-agnostic: exposes a process_request() method that takes
 generic inputs and returns generic outputs. No framework imports.
 
 Usage:
@@ -15,10 +15,10 @@ Usage:
     )
 
     if isinstance(result, dict):
-        # 402 — return body + result["headers"] (contains PAYMENT-REQUIRED)
+        # 402: return body + result["headers"] (contains PAYMENT-REQUIRED)
         ...
     else:
-        # PaymentInfo — return data + result.response_headers (contains PAYMENT-RESPONSE)
+        # PaymentInfo: return data + result.response_headers (contains PAYMENT-RESPONSE)
         ...
 """
 
@@ -288,7 +288,7 @@ class GatewayMiddleware:
                 "body": {"error": "Invalid payment signature"},
             }
 
-        # Settle via Gateway API — block access on failure
+        # Settle via Gateway API; block access on failure
         try:
             settle_result = await self._facilitator.settle(
                 payload=header_data,

@@ -711,7 +711,7 @@ class TestX402Headers:
             mock_402 = MagicMock()
             mock_402.status_code = 402
             mock_402.headers = {"payment-required": encoded_header}
-            mock_402.content = b"{}"  # empty/invalid body — header should be used
+            mock_402.content = b"{}"  # empty/invalid body; header should be used
 
             # Paid response
             mock_paid = MagicMock()

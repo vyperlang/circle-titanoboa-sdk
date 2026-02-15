@@ -23,6 +23,9 @@ HAS_CIRCLE_CREDS = bool(os.environ.get("CIRCLE_API_KEY") and os.environ.get("CIR
 SKIP_REASON_PK = "PRIVATE_KEY not set"
 SKIP_REASON_CIRCLE = "CIRCLE_API_KEY or CIRCLE_ENTITY_SECRET not set"
 
+# Disable boa's evm_snapshot isolation (real RPCs don't support it)
+pytestmark = pytest.mark.ignore_isolation
+
 
 # =============================================================================
 # E2E: DEPOSIT AND VERIFY FLOW
@@ -57,8 +60,7 @@ class TestDepositFlow:
 
         # Step 1: Get initial balances
         print("\nStep 1: Getting initial balances...")
-        async with client:
-            initial = await client.get_balances()
+        initial = await client.get_balances()
 
         print(f"  Wallet: {initial.wallet.formatted} USDC")
         print(f"  Gateway: {initial.gateway.formatted_total} USDC")
@@ -66,12 +68,12 @@ class TestDepositFlow:
         # Check we have enough for a small deposit
         min_deposit = 10000  # 0.01 USDC
         if initial.wallet.balance < min_deposit * 2:  # Need some buffer
+            await client.close()
             pytest.skip("Insufficient balance for deposit test")
 
         # Step 2: Deposit
         print("\nStep 2: Depositing 0.01 USDC...")
-        async with client:
-            result = await client.deposit("0.01")
+        result = await client.deposit("0.01")
 
         print(f"  Approval TX: {result.approval_tx_hash or 'N/A'}")
         print(f"  Deposit TX: {result.deposit_tx_hash}")
@@ -81,8 +83,7 @@ class TestDepositFlow:
         print("\nStep 3: Waiting for indexing...")
         time.sleep(3)
 
-        async with client:
-            final = await client.get_balances()
+        final = await client.get_balances()
 
         print(f"  Wallet: {final.wallet.formatted} USDC")
         print(f"  Gateway: {final.gateway.formatted_total} USDC")
@@ -187,14 +188,16 @@ class TestPaymentSignatureFlow:
         decoded = decode_payment_header(header)
 
         print(f"  Decoded fields: {list(decoded.keys())}")
-        print(f"  Has signature: {'signature' in decoded}")
-        print(f"  Has authorization: {'authorization' in decoded}")
 
-        # The decoded header is the payment payload directly
-        assert "signature" in decoded
-        assert "authorization" in decoded
+        # The new SDK wraps signature/authorization under "payload"
+        payload = decoded.get("payload", decoded)
+        print(f"  Has signature: {'signature' in payload}")
+        print(f"  Has authorization: {'authorization' in payload}")
 
-        authorization = decoded["authorization"]
+        assert "signature" in payload
+        assert "authorization" in payload
+
+        authorization = payload["authorization"]
         assert "from" in authorization
         assert "to" in authorization
 

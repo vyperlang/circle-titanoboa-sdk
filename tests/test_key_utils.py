@@ -1,4 +1,4 @@
-"""Tests for circlekit.key_utils — normalization and account creation."""
+"""Tests for circlekit.key_utils: normalization and account creation."""
 
 import pytest
 from circlekit.key_utils import account_from_key_like, normalize_private_key
