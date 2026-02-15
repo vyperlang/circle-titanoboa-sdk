@@ -1,304 +1,388 @@
 """
 Server-side middleware for accepting Circle Gateway payments.
 
-This module provides Flask and FastAPI compatible middleware for
-implementing x402 paywalls.
+Framework-agnostic — exposes a process_request() method that takes
+generic inputs and returns generic outputs. No framework imports.
 
-Usage (Flask):
-    from flask import Flask
-    from circlekit import create_gateway_middleware
-    
-    app = Flask(__name__)
-    gateway = create_gateway_middleware(seller_address='0x...')
-    
-    @app.route('/api/premium')
-    @gateway.require('$0.01')
-    def premium_endpoint(payment):
-        return {'data': 'premium content', 'paid_by': payment.payer}
+Usage:
+    gateway = create_gateway_middleware(seller_address='0x...', chain='arcTestnet')
 
-Usage (FastAPI):
-    from fastapi import FastAPI, Depends
-    from circlekit import create_gateway_middleware
-    
-    app = FastAPI()
-    gateway = create_gateway_middleware(seller_address='0x...')
-    
-    @app.get('/api/premium')
-    async def premium_endpoint(payment = Depends(gateway.require('$0.01'))):
-        return {'data': 'premium content', 'paid_by': payment.payer}
+    # In any framework:
+    result = await gateway.process_request(
+        payment_header=request.headers.get("PAYMENT-SIGNATURE"),
+        path="/api/analyze",
+        price="$0.01",
+    )
+
+    if isinstance(result, dict):
+        # 402 — return body + result["headers"] (contains PAYMENT-REQUIRED)
+        ...
+    else:
+        # PaymentInfo — return data + result.response_headers (contains PAYMENT-RESPONSE)
+        ...
 """
 
-import functools
-import json
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Union
-import httpx
+from typing import Any
 
+from circlekit.boa_utils import parse_usdc
 from circlekit.constants import (
     CHAIN_CONFIGS,
+    CIRCLE_BATCHING_NAME,
+    CIRCLE_BATCHING_SCHEME,
+    CIRCLE_BATCHING_VERSION,
+    DEFAULT_MAX_TIMEOUT_SECONDS,
+    X402_VERSION,
     ChainConfig,
     get_gateway_api_url,
-    USDC_DECIMALS,
 )
-from circlekit.boa_utils import parse_usdc
+from circlekit.facilitator import BatchFacilitatorClient, SettleResponse, VerifyResponse
 from circlekit.x402 import (
-    build_402_response,
-    decode_payment_header,
-    is_batch_payment,
+    PAYMENT_REQUIRED_HEADER,
+    PAYMENT_RESPONSE_HEADER,
     PaymentInfo,
+    decode_payment_header,
+    encode_payment_required,
+    encode_payment_response,
 )
 
 
 @dataclass
 class GatewayMiddlewareConfig:
     """Configuration for Gateway middleware."""
+
     seller_address: str
-    networks: List[str] = field(default_factory=list)
+    networks: list[str] = field(default_factory=list)
     description: str = "Paid resource"
     chain: str = "arcTestnet"
 
 
 class GatewayMiddleware:
     """
-    Express-style middleware for accepting Gateway payments.
-    
-    Works with Flask, FastAPI, and other WSGI/ASGI frameworks.
+    Framework-agnostic middleware for accepting Gateway payments.
+
+    Uses BatchFacilitatorClient for real cryptographic verification
+    and settlement via the Gateway API.
     """
-    
+
     def __init__(self, config: GatewayMiddlewareConfig):
         self._config = config
         self._chain_config = CHAIN_CONFIGS.get(config.chain, CHAIN_CONFIGS["arcTestnet"])
         self._gateway_api = get_gateway_api_url(self._chain_config.is_testnet)
-        self._http = httpx.Client(timeout=30.0)
-    
-    def require(self, price: str) -> Callable:
-        """
-        Create a decorator/dependency that requires payment.
-        
-        Args:
-            price: Price in USD (e.g., '$0.01' or '0.01')
-            
+        self._facilitator = BatchFacilitatorClient(url=self._gateway_api)
+
+        # Build accepted chains map: "eip155:{chain_id}" -> ChainConfig
+        # If config.networks is non-empty, resolve each to ChainConfig;
+        # otherwise, default to just the primary chain.
+        self._accepted_chains: dict[str, ChainConfig] = {}
+        if config.networks:
+            for net_name in config.networks:
+                cc = CHAIN_CONFIGS.get(net_name)
+                if cc is None:
+                    raise ValueError(
+                        f"Unknown network: {net_name}. Supported: {', '.join(CHAIN_CONFIGS.keys())}"
+                    )
+                self._accepted_chains[f"eip155:{cc.chain_id}"] = cc
+        else:
+            self._accepted_chains[f"eip155:{self._chain_config.chain_id}"] = self._chain_config
+
+    def _decode_and_resolve(
+        self,
+        payment_header: str,
+        price: str,
+    ) -> tuple[dict[str, Any], dict[str, Any], str]:
+        """Decode a payment header and build server-side requirements.
+
         Returns:
-            Decorator for Flask or dependency for FastAPI
+            (header_data, server_requirements, network) on success.
+
+        Raises:
+            ValueError: On malformed header or unsupported network.
         """
         amount = parse_usdc(price)
-        
-        def decorator(func: Callable) -> Callable:
-            @functools.wraps(func)
-            def wrapper(*args, **kwargs):
-                # Get request from framework (Flask or other)
-                from flask import request, jsonify, make_response
-                
-                # Check for Payment-Signature header
-                payment_header = request.headers.get("Payment-Signature")
-                
-                if not payment_header:
-                    # Return 402 with payment requirements
-                    response_body = build_402_response(
-                        seller_address=self._config.seller_address,
-                        amount=str(amount),
-                        chain_id=self._chain_config.chain_id,
-                        usdc_address=self._chain_config.usdc_address,
-                        gateway_address=self._chain_config.gateway_address,
-                        description=self._config.description,
-                    )
-                    response_body["resource"]["url"] = request.path
-                    
-                    response = make_response(jsonify(response_body), 402)
-                    response.headers["Content-Type"] = "application/json"
-                    return response
-                
-                # Verify payment
-                try:
-                    payment = self._verify_payment(payment_header, amount)
-                except Exception as e:
-                    response = make_response(
-                        jsonify({"error": f"Payment verification failed: {str(e)}"}),
-                        402
-                    )
-                    return response
-                
-                if not payment.verified:
-                    response = make_response(
-                        jsonify({"error": "Invalid payment signature"}),
-                        402
-                    )
-                    return response
-                
-                # Settle payment
-                try:
-                    settlement = self._settle_payment(payment_header, amount)
-                    if settlement:
-                        payment.transaction = settlement.get("transaction", "")
-                except Exception as e:
-                    # Log but don't fail - verification is sufficient for demo
-                    pass
-                
-                # Attach payment to kwargs and call handler
-                kwargs["payment"] = payment
-                return func(*args, **kwargs)
-            
-            return wrapper
-        
-        return decorator
-    
-    def require_fastapi(self, price: str):
+
+        header_data = decode_payment_header(payment_header)
+        if not isinstance(header_data, dict):
+            raise ValueError("Payment header must decode to a JSON object")
+
+        accepted = header_data.get("accepted") or {}
+        if not isinstance(accepted, dict):
+            raise ValueError("Invalid payment header: 'accepted' must be an object")
+        network = accepted.get("network", f"eip155:{self._chain_config.chain_id}")
+
+        if network not in self._accepted_chains:
+            raise ValueError(f"Network {network} is not accepted by this server")
+
+        matched_chain = self._accepted_chains[network]
+
+        server_requirements = {
+            "scheme": CIRCLE_BATCHING_SCHEME,
+            "network": network,
+            "asset": matched_chain.usdc_address,
+            "amount": str(amount),
+            "payTo": self._config.seller_address,
+            "maxTimeoutSeconds": DEFAULT_MAX_TIMEOUT_SECONDS,
+            "extra": {
+                "name": CIRCLE_BATCHING_NAME,
+                "version": CIRCLE_BATCHING_VERSION,
+                "verifyingContract": matched_chain.gateway_address,
+            },
+        }
+
+        return header_data, server_requirements, network
+
+    def require(self, price: str, path: str) -> dict[str, Any]:
         """
-        Create a FastAPI dependency that requires payment.
-        
+        Build a 402 Payment Required response.
+
         Args:
-            price: Price in USD (e.g., '$0.01')
-            
+            price: Price in USD (e.g., "$0.01")
+            path: Request path (e.g., "/api/analyze")
+
         Returns:
-            FastAPI Depends-compatible callable
+            Dict with status, headers, and body for a 402 response.
         """
         amount = parse_usdc(price)
-        
-        async def dependency(request):
-            from fastapi import HTTPException
-            from fastapi.responses import JSONResponse
-            
-            # Check for Payment-Signature header
-            payment_header = request.headers.get("payment-signature")
-            
-            if not payment_header:
-                # Return 402 with payment requirements
-                response_body = build_402_response(
-                    seller_address=self._config.seller_address,
-                    amount=str(amount),
-                    chain_id=self._chain_config.chain_id,
-                    usdc_address=self._chain_config.usdc_address,
-                    gateway_address=self._chain_config.gateway_address,
-                    description=self._config.description,
-                )
-                response_body["resource"]["url"] = str(request.url.path)
-                
-                raise HTTPException(
-                    status_code=402,
-                    detail=response_body,
-                )
-            
-            # Verify payment
-            try:
-                payment = self._verify_payment(payment_header, amount)
-            except Exception as e:
-                raise HTTPException(
-                    status_code=402,
-                    detail={"error": f"Payment verification failed: {str(e)}"},
-                )
-            
-            if not payment.verified:
-                raise HTTPException(
-                    status_code=402,
-                    detail={"error": "Invalid payment signature"},
-                )
-            
-            return payment
-        
-        return dependency
-    
-    def _verify_payment(self, header: str, expected_amount: int) -> PaymentInfo:
+        body = self._build_402_response(str(amount), path)
+        return {
+            "status": 402,
+            "headers": {PAYMENT_REQUIRED_HEADER: encode_payment_required(body)},
+            "body": body,
+        }
+
+    async def verify(self, payment_header: str, price: str) -> VerifyResponse:
         """
-        Verify a payment signature.
-        
-        In production, this would call the Gateway verify endpoint.
-        For demo purposes, we do basic validation.
+        Verify a payment header against the Gateway API.
+
+        Args:
+            payment_header: Value of Payment-Signature header
+            price: Price in USD (e.g., "$0.01")
+
+        Returns:
+            VerifyResponse with is_valid flag
+
+        Raises:
+            ValueError: On malformed header or unsupported network.
         """
-        try:
-            payload = decode_payment_header(header)
-        except Exception as e:
-            return PaymentInfo(
-                verified=False,
-                payer="",
-                amount="0",
-                network="",
-            )
-        
-        # Extract authorization info
-        authorization = payload.get("authorization", {})
-        accepted = payload.get("accepted", {})
-        
-        payer = authorization.get("from", "")
-        pay_to = authorization.get("to", "")
-        value = str(authorization.get("value", 0))
-        network = accepted.get("network", "")
-        
-        # Basic validation
-        verified = (
-            payer != "" and
-            pay_to.lower() == self._config.seller_address.lower() and
-            int(value) >= expected_amount
+        header_data, server_requirements, _network = self._decode_and_resolve(
+            payment_header,
+            price,
         )
-        
-        # In production, call Gateway API to verify signature
-        # response = self._http.post(
-        #     f"{self._gateway_api}/v1/x402/verify",
-        #     json={"paymentPayload": payload, "paymentRequirements": accepted}
-        # )
-        
+        return await self._facilitator.verify(
+            payload=header_data,
+            requirements=server_requirements,
+        )
+
+    def _build_payment_info(
+        self,
+        header_data: dict[str, Any],
+        settle_result: SettleResponse,
+        network: str,
+        price: str,
+    ) -> PaymentInfo:
+        """Build a PaymentInfo from a successful settle result."""
+        amount = parse_usdc(price)
+        payload = header_data.get("payload", header_data)
+        authorization = payload.get("authorization", {})
+        payer = authorization.get("from", "")
+        value = str(authorization.get("value", amount))
+
+        response_headers = {
+            PAYMENT_RESPONSE_HEADER: encode_payment_response(
+                {
+                    "success": settle_result.success,
+                    "transaction": settle_result.transaction or "",
+                    "payer": payer,
+                    "network": network,
+                }
+            )
+        }
+
         return PaymentInfo(
-            verified=verified,
+            verified=True,
             payer=payer,
             amount=value,
             network=network,
+            transaction=settle_result.transaction,
+            response_headers=response_headers,
         )
-    
-    def _settle_payment(self, header: str, amount: int) -> Optional[Dict]:
+
+    async def settle(self, payment_header: str, price: str) -> PaymentInfo:
         """
-        Submit payment for settlement.
-        
-        In production, this calls the Gateway settle endpoint.
+        Settle a verified payment via the Gateway API.
+
+        Args:
+            payment_header: Value of Payment-Signature header
+            price: Price in USD (e.g., "$0.01")
+
+        Returns:
+            PaymentInfo with transaction hash and response headers.
+
+        Raises:
+            ValueError: On malformed header, unsupported network, or settlement failure.
         """
+        header_data, server_requirements, network = self._decode_and_resolve(
+            payment_header,
+            price,
+        )
+
+        settle_result = await self._facilitator.settle(
+            payload=header_data,
+            requirements=server_requirements,
+        )
+
+        if not settle_result.success:
+            raise ValueError(f"Payment settlement failed: {settle_result.error_reason}")
+
+        return self._build_payment_info(header_data, settle_result, network, price)
+
+    async def process_request(
+        self,
+        payment_header: str | None,
+        path: str,
+        price: str,
+    ) -> dict[str, Any] | PaymentInfo:
+        """
+        Process a request that may require payment.
+
+        Convenience method that combines require(), verify(), and settle().
+
+        Returns either:
+          - A dict {"status": 402, "body": {...}} if payment needed/failed
+          - A PaymentInfo on success
+
+        Args:
+            payment_header: Value of Payment-Signature header, or None
+            path: Request path (e.g., "/api/analyze")
+            price: Price in USD (e.g., "$0.01")
+        """
+        if not payment_header:
+            return self.require(price, path)
+
         try:
-            payload = decode_payment_header(header)
-            accepted = payload.get("accepted", {})
-            
-            # Call Gateway settle endpoint
-            response = self._http.post(
-                f"{self._gateway_api}/v1/x402/settle",
-                json={
-                    "paymentPayload": payload,
-                    "paymentRequirements": accepted,
+            header_data, server_requirements, network = self._decode_and_resolve(
+                payment_header,
+                price,
+            )
+        except Exception as e:
+            return {
+                "status": 402,
+                "body": {"error": f"Invalid payment header: {e}"},
+            }
+
+        # Verify via Gateway API
+        try:
+            verify_result = await self._facilitator.verify(
+                payload=header_data,
+                requirements=server_requirements,
+            )
+        except Exception as e:
+            return {
+                "status": 402,
+                "body": {"error": f"Payment verification failed: {e}"},
+            }
+
+        if not verify_result.is_valid:
+            return {
+                "status": 402,
+                "body": {"error": "Invalid payment signature"},
+            }
+
+        # Settle via Gateway API — block access on failure
+        try:
+            settle_result = await self._facilitator.settle(
+                payload=header_data,
+                requirements=server_requirements,
+            )
+        except Exception as e:
+            return {
+                "status": 402,
+                "body": {"error": f"Payment settlement failed: {e}"},
+            }
+
+        if not settle_result.success:
+            return {
+                "status": 402,
+                "body": {
+                    "error": "Payment settlement failed",
+                    "reason": settle_result.error_reason,
+                },
+            }
+
+        return self._build_payment_info(header_data, settle_result, network, price)
+
+    def _build_402_response(self, amount: str, path: str) -> dict[str, Any]:
+        """Build a 402 response body with one accepts entry per accepted network."""
+        accepts = []
+        for network_id, cc in self._accepted_chains.items():
+            accepts.append(
+                {
+                    "scheme": CIRCLE_BATCHING_SCHEME,
+                    "network": network_id,
+                    "asset": cc.usdc_address,
+                    "amount": amount,
+                    "payTo": self._config.seller_address,
+                    "maxTimeoutSeconds": DEFAULT_MAX_TIMEOUT_SECONDS,
+                    "extra": {
+                        "name": CIRCLE_BATCHING_NAME,
+                        "version": CIRCLE_BATCHING_VERSION,
+                        "verifyingContract": cc.gateway_address,
+                    },
                 }
             )
-            
-            if response.status_code == 200:
-                return response.json()
-            
-        except Exception:
-            pass
-        
-        return None
+
+        return {
+            "x402Version": X402_VERSION,
+            "resource": {
+                "url": path,
+                "description": self._config.description,
+                "mimeType": "application/json",
+            },
+            "accepts": accepts,
+        }
+
+    async def close(self):
+        """Close the facilitator HTTP client."""
+        await self._facilitator.close()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.close()
+        return False
 
 
 def create_gateway_middleware(
     seller_address: str,
-    networks: Optional[List[str]] = None,
+    networks: list[str] | None = None,
     description: str = "Paid resource",
     chain: str = "arcTestnet",
 ) -> GatewayMiddleware:
     """
     Create middleware for accepting Gateway payments.
-    
+
     Args:
         seller_address: Your wallet address to receive payments
-        networks: List of networks to accept (default: all)
+        networks: List of networks to accept (default: just the primary chain)
         description: Resource description for 402 responses
         chain: Primary chain for configuration
-        
+
     Returns:
         GatewayMiddleware instance
-        
+
     Example:
         gateway = create_gateway_middleware(
             seller_address='0x1234...',
-            chain='arcTestnet'
+            chain='arcTestnet',
         )
-        
-        @app.route('/api')
-        @gateway.require('$0.01')
-        def api(payment):
-            return {'paid_by': payment.payer}
+
+        # In your framework handler:
+        result = await gateway.process_request(
+            payment_header=request.headers.get("Payment-Signature"),
+            path=request.path,
+            price="$0.01",
+        )
     """
     config = GatewayMiddlewareConfig(
         seller_address=seller_address,
@@ -307,88 +391,3 @@ def create_gateway_middleware(
         chain=chain,
     )
     return GatewayMiddleware(config)
-
-
-# Standalone ASGI/WSGI middleware for use without decorators
-class X402Middleware:
-    """
-    ASGI middleware for x402 payment handling.
-    
-    Can be used as app-level middleware to handle all payment
-    requirements automatically.
-    """
-    
-    def __init__(
-        self,
-        app,
-        seller_address: str,
-        routes: Dict[str, str] = None,
-        chain: str = "arcTestnet",
-    ):
-        """
-        Args:
-            app: ASGI application
-            seller_address: Address to receive payments
-            routes: Dict of {path: price} for paywalled routes
-            chain: Chain to use
-        """
-        self.app = app
-        self.seller_address = seller_address
-        self.routes = routes or {}
-        self.chain = chain
-        self._gateway = create_gateway_middleware(seller_address, chain=chain)
-    
-    async def __call__(self, scope, receive, send):
-        """ASGI interface."""
-        if scope["type"] != "http":
-            await self.app(scope, receive, send)
-            return
-        
-        path = scope["path"]
-        
-        if path not in self.routes:
-            await self.app(scope, receive, send)
-            return
-        
-        # This route is paywalled
-        price = self.routes[path]
-        
-        # Check for payment header
-        headers = dict(scope.get("headers", []))
-        payment_header = headers.get(b"payment-signature", b"").decode()
-        
-        if not payment_header:
-            # Return 402
-            await self._send_402(send, path, price)
-            return
-        
-        # Verify and proceed
-        await self.app(scope, receive, send)
-    
-    async def _send_402(self, send, path: str, price: str):
-        """Send 402 response."""
-        chain_config = CHAIN_CONFIGS.get(self.chain, CHAIN_CONFIGS["arcTestnet"])
-        
-        body = build_402_response(
-            seller_address=self.seller_address,
-            amount=str(parse_usdc(price)),
-            chain_id=chain_config.chain_id,
-            usdc_address=chain_config.usdc_address,
-            gateway_address=chain_config.gateway_address,
-        )
-        body["resource"]["url"] = path
-        
-        body_bytes = json.dumps(body).encode()
-        
-        await send({
-            "type": "http.response.start",
-            "status": 402,
-            "headers": [
-                [b"content-type", b"application/json"],
-                [b"content-length", str(len(body_bytes)).encode()],
-            ],
-        })
-        await send({
-            "type": "http.response.body",
-            "body": body_bytes,
-        })

@@ -1,0 +1,121 @@
+"""
+TxExecutor protocol and default BoaTxExecutor implementation.
+
+TxExecutor defines the capability for executing onchain transactions
+(approve, deposit, gatewayMint, allowance checks). This is separate from
+the Signer protocol (EIP-712 signing for gasless intents).
+
+BoaTxExecutor wraps the existing boa_utils helpers with a private key.
+"""
+
+from typing import Protocol, runtime_checkable
+
+from circlekit import boa_utils
+from circlekit.key_utils import PrivateKeyLike, account_from_key_like
+
+
+@runtime_checkable
+class TxExecutor(Protocol):
+    """Protocol for executing onchain transactions."""
+
+    def execute_approve(
+        self, chain: str, owner: str, spender: str, amount: int, rpc_url: str | None = None
+    ) -> str: ...
+    def execute_deposit(
+        self, chain: str, owner: str, amount: int, rpc_url: str | None = None
+    ) -> str: ...
+    def execute_deposit_for(
+        self, chain: str, owner: str, depositor: str, amount: int, rpc_url: str | None = None
+    ) -> str: ...
+    def execute_gateway_mint(
+        self,
+        chain: str,
+        attestation: str | bytes,
+        signature: str | bytes,
+        rpc_url: str | None = None,
+    ) -> str: ...
+    def execute_initiate_withdrawal(
+        self, chain: str, owner: str, amount: int, rpc_url: str | None = None
+    ) -> str: ...
+    def execute_complete_withdrawal(
+        self, chain: str, owner: str, rpc_url: str | None = None
+    ) -> str: ...
+    def check_allowance(
+        self, chain: str, owner: str, spender: str, rpc_url: str | None = None
+    ) -> int: ...
+
+
+def _normalize_bytes(v: str | bytes) -> bytes:
+    """Normalize hex string or bytes to bytes.
+
+    Raises ValueError on empty input.
+    """
+    if isinstance(v, bytes):
+        if not v:
+            raise ValueError("Expected non-empty bytes")
+        return v
+    if not v:
+        raise ValueError("Expected non-empty hex string")
+    s = v
+    if s.startswith("0x"):
+        s = s[2:]
+    if not s:
+        raise ValueError("Expected non-empty hex string")
+    return bytes.fromhex(s)
+
+
+class BoaTxExecutor:
+    """TxExecutor backed by titanoboa (requires private key)."""
+
+    def __init__(self, private_key: PrivateKeyLike):
+        self._account = account_from_key_like(private_key)
+        self._private_key = "0x" + self._account.key.hex()
+
+    def __repr__(self) -> str:
+        return f"BoaTxExecutor(address={self._account.address})"
+
+    @property
+    def address(self) -> str:
+        """The account's wallet address."""
+        return str(self._account.address)
+
+    def execute_approve(
+        self, chain: str, owner: str, spender: str, amount: int, rpc_url: str | None = None
+    ) -> str:
+        return boa_utils.execute_approve(chain, self._private_key, spender, amount, rpc_url)
+
+    def execute_deposit(
+        self, chain: str, owner: str, amount: int, rpc_url: str | None = None
+    ) -> str:
+        return boa_utils.execute_deposit(chain, self._private_key, amount, rpc_url)
+
+    def execute_deposit_for(
+        self, chain: str, owner: str, depositor: str, amount: int, rpc_url: str | None = None
+    ) -> str:
+        return boa_utils.execute_deposit_for(chain, self._private_key, depositor, amount, rpc_url)
+
+    def execute_gateway_mint(
+        self,
+        chain: str,
+        attestation: str | bytes,
+        signature: str | bytes,
+        rpc_url: str | None = None,
+    ) -> str:
+        att = _normalize_bytes(attestation)
+        sig = _normalize_bytes(signature)
+        return boa_utils.execute_gateway_mint(chain, self._private_key, att, sig, rpc_url)
+
+    def execute_initiate_withdrawal(
+        self, chain: str, owner: str, amount: int, rpc_url: str | None = None
+    ) -> str:
+        return boa_utils.execute_initiate_withdrawal(chain, self._private_key, amount, rpc_url)
+
+    def execute_complete_withdrawal(
+        self, chain: str, owner: str, rpc_url: str | None = None
+    ) -> str:
+        return boa_utils.execute_complete_withdrawal(chain, self._private_key, rpc_url)
+
+    def check_allowance(
+        self, chain: str, owner: str, spender: str, rpc_url: str | None = None
+    ) -> int:
+        return boa_utils.check_allowance(chain, owner, spender, rpc_url)

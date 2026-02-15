@@ -1,42 +1,25 @@
 """
 Titanoboa utilities for Circle Gateway interactions.
 
-This module provides helpers for using titanoboa (boa) for all on-chain
-interactions instead of web3.py. It handles:
+This module provides helpers for using titanoboa (boa) for on-chain
+interactions. It handles:
 - RPC connection management
 - Contract loading and interaction
 - Transaction building and signing
 - ABI encoding/decoding
 """
 
-from typing import Any, Dict, Optional, Tuple
-import os
 import json
+import os
+from decimal import ROUND_HALF_UP, Decimal
+from typing import Any
 
 import boa
+import httpx
 from eth_account import Account
-from eth_account.messages import encode_typed_data
 
-from circlekit.constants import CHAIN_CONFIGS, ChainConfig
-
-
-def get_chain_config(chain: str) -> ChainConfig:
-    """
-    Get the configuration for a chain by name.
-    
-    Args:
-        chain: Chain name (e.g., 'arcTestnet', 'baseSepolia')
-        
-    Returns:
-        ChainConfig with RPC URL, addresses, etc.
-        
-    Raises:
-        ValueError: If chain is not supported
-    """
-    if chain not in CHAIN_CONFIGS:
-        supported = ", ".join(CHAIN_CONFIGS.keys())
-        raise ValueError(f"Unsupported chain: {chain}. Supported: {supported}")
-    return CHAIN_CONFIGS[chain]
+from circlekit.constants import USDC_DECIMALS, get_chain_config
+from circlekit.key_utils import normalize_private_key
 
 
 def get_rpc_url(chain: str) -> str:
@@ -44,24 +27,24 @@ def get_rpc_url(chain: str) -> str:
     return get_chain_config(chain).rpc_url
 
 
-def setup_boa_env(chain: str, rpc_url: Optional[str] = None) -> None:
+def setup_boa_env(chain: str, rpc_url: str | None = None) -> None:
     """
     Configure titanoboa environment for a specific chain.
-    
+
     Args:
         chain: Chain name (e.g., 'arcTestnet')
         rpc_url: Optional custom RPC URL (overrides default)
-        
+
     Note:
         Adds a dummy account because titanoboa's NetworkEnv requires
         an EOA even for read-only (view) function calls.
     """
     config = get_chain_config(chain)
     url = rpc_url or config.rpc_url
-    
+
     # Set the RPC URL in boa environment
     boa.set_network_env(url)
-    
+
     # Add a dummy account for read-only operations
     # (titanoboa requires an EOA even for view calls)
     if boa.env.eoa is None:
@@ -70,71 +53,20 @@ def setup_boa_env(chain: str, rpc_url: Optional[str] = None) -> None:
         boa.env.add_account(dummy_account)
 
 
-def get_account_from_private_key(private_key: str) -> Tuple[str, Account]:
+def get_account_from_private_key(private_key: str) -> tuple[str, Account]:
     """
     Get an account from a private key.
-    
+
     Args:
         private_key: Hex-encoded private key (with or without 0x prefix)
-        
+
     Returns:
         Tuple of (address, Account object)
     """
-    if not private_key.startswith("0x"):
-        private_key = "0x" + private_key
-    
+    private_key = normalize_private_key(private_key)
+
     account = Account.from_key(private_key)
     return account.address, account
-
-
-def sign_typed_data(
-    private_key: str,
-    domain_data: Dict[str, Any],
-    message_types: Dict[str, list],
-    message_data: Dict[str, Any],
-    primary_type: str,
-) -> str:
-    """
-    Sign EIP-712 typed data.
-    
-    This is used for signing USDC TransferWithAuthorization messages
-    for gasless payments.
-    
-    Args:
-        private_key: Hex-encoded private key
-        domain_data: EIP-712 domain (name, version, chainId, verifyingContract)
-        message_types: Type definitions for the message
-        message_data: The actual message to sign
-        primary_type: The primary type name
-        
-    Returns:
-        Hex-encoded signature
-    """
-    if not private_key.startswith("0x"):
-        private_key = "0x" + private_key
-    
-    account = Account.from_key(private_key)
-    
-    # Construct the full typed data
-    full_message = {
-        "types": {
-            "EIP712Domain": [
-                {"name": "name", "type": "string"},
-                {"name": "version", "type": "string"},
-                {"name": "chainId", "type": "uint256"},
-                {"name": "verifyingContract", "type": "address"},
-            ],
-            **message_types,
-        },
-        "primaryType": primary_type,
-        "domain": domain_data,
-        "message": message_data,
-    }
-    
-    # Sign the typed data
-    signed = account.sign_typed_data(full_message=full_message)
-    
-    return signed.signature.hex()
 
 
 # ERC-20 ABI (minimal for balance checks)
@@ -203,7 +135,7 @@ GATEWAY_WALLET_ABI = json.loads("""[
         "outputs": []
     },
     {
-        "name": "balanceOf",
+        "name": "totalBalance",
         "type": "function",
         "stateMutability": "view",
         "inputs": [
@@ -213,7 +145,54 @@ GATEWAY_WALLET_ABI = json.loads("""[
         "outputs": [{"name": "", "type": "uint256"}]
     },
     {
-        "name": "withdraw",
+        "name": "availableBalance",
+        "type": "function",
+        "stateMutability": "view",
+        "inputs": [
+            {"name": "token", "type": "address"},
+            {"name": "depositor", "type": "address"}
+        ],
+        "outputs": [{"name": "", "type": "uint256"}]
+    },
+    {
+        "name": "withdrawingBalance",
+        "type": "function",
+        "stateMutability": "view",
+        "inputs": [
+            {"name": "token", "type": "address"},
+            {"name": "depositor", "type": "address"}
+        ],
+        "outputs": [{"name": "", "type": "uint256"}]
+    },
+    {
+        "name": "withdrawableBalance",
+        "type": "function",
+        "stateMutability": "view",
+        "inputs": [
+            {"name": "token", "type": "address"},
+            {"name": "depositor", "type": "address"}
+        ],
+        "outputs": [{"name": "", "type": "uint256"}]
+    },
+    {
+        "name": "withdrawalDelay",
+        "type": "function",
+        "stateMutability": "view",
+        "inputs": [],
+        "outputs": [{"name": "", "type": "uint256"}]
+    },
+    {
+        "name": "withdrawalBlock",
+        "type": "function",
+        "stateMutability": "view",
+        "inputs": [
+            {"name": "token", "type": "address"},
+            {"name": "depositor", "type": "address"}
+        ],
+        "outputs": [{"name": "", "type": "uint256"}]
+    },
+    {
+        "name": "initiateWithdrawal",
         "type": "function",
         "stateMutability": "nonpayable",
         "inputs": [
@@ -221,59 +200,48 @@ GATEWAY_WALLET_ABI = json.loads("""[
             {"name": "amount", "type": "uint256"}
         ],
         "outputs": []
+    },
+    {
+        "name": "withdraw",
+        "type": "function",
+        "stateMutability": "nonpayable",
+        "inputs": [
+            {"name": "token", "type": "address"}
+        ],
+        "outputs": []
     }
 ]""")
 
 
-def load_usdc_contract(chain: str, rpc_url: Optional[str] = None):
-    """
-    Load the USDC contract for a chain using boa.
-    
-    Args:
-        chain: Chain name
-        rpc_url: Optional custom RPC URL
-        
-    Returns:
-        Contract object with USDC methods
-    """
-    config = get_chain_config(chain)
-    setup_boa_env(chain, rpc_url)
-    
-    # Load contract from ABI and get instance at address
-    factory = boa.loads_abi(json.dumps(ERC20_ABI))
-    return factory.at(config.usdc_address)
-
-
-def load_gateway_contract(chain: str, rpc_url: Optional[str] = None):
-    """
-    Load the Gateway Wallet contract for a chain using boa.
-    
-    Args:
-        chain: Chain name
-        rpc_url: Optional custom RPC URL
-        
-    Returns:
-        Contract object with Gateway methods
-    """
-    config = get_chain_config(chain)
-    setup_boa_env(chain, rpc_url)
-    
-    # Load contract from ABI and get instance at address
-    factory = boa.loads_abi(json.dumps(GATEWAY_WALLET_ABI))
-    return factory.at(config.gateway_address)
+# Gateway Minter ABI for cross-chain minting
+GATEWAY_MINTER_ABI = json.loads("""[
+    {
+        "name": "gatewayMint",
+        "type": "function",
+        "stateMutability": "nonpayable",
+        "inputs": [
+            {"name": "attestationPayload", "type": "bytes"},
+            {"name": "signature", "type": "bytes"}
+        ],
+        "outputs": []
+    }
+]""")
 
 
 def format_usdc(amount: int) -> str:
     """Format a raw USDC amount (6 decimals) to a human-readable string."""
-    return f"{amount / 10**6:.6f}"
+    return f"{amount / 10**USDC_DECIMALS:.{USDC_DECIMALS}f}"
 
 
 def parse_usdc(amount: str) -> int:
-    """Parse a human-readable USDC amount to raw integer (6 decimals)."""
-    # Remove $ prefix if present
+    """
+    Parse a human-readable USDC amount to raw integer (6 decimals).
+
+    Uses Decimal for proper rounding (half-up).
+    """
     if amount.startswith("$"):
         amount = amount[1:]
-    return int(float(amount) * 10**6)
+    return int((Decimal(amount) * 10**USDC_DECIMALS).quantize(1, ROUND_HALF_UP))
 
 
 def generate_nonce() -> bytes:
@@ -281,57 +249,70 @@ def generate_nonce() -> bytes:
     return os.urandom(32)
 
 
-def get_block_timestamp(chain: str, rpc_url: Optional[str] = None) -> int:
+def get_block_number(chain: str, rpc_url: str | None = None) -> int:
     """
-    Get the current block timestamp for a chain.
-    
+    Get the current block number for a chain.
+
     Uses titanoboa's RPC connection.
     """
-    setup_boa_env(chain, rpc_url)
-    return boa.env.vm.state.timestamp
+    config = get_chain_config(chain)
+    url = rpc_url or config.rpc_url
+
+    payload = {
+        "jsonrpc": "2.0",
+        "method": "eth_blockNumber",
+        "params": [],
+        "id": 1,
+    }
+    response = httpx.post(url, json=payload, timeout=30.0)
+    response.raise_for_status()
+    body = response.json()
+
+    if "error" in body:
+        err = body["error"]
+        msg = err.get("message", err) if isinstance(err, dict) else err
+        raise RuntimeError(f"RPC error from {url}: {msg}")
+
+    result = body.get("result")
+    if not result:
+        raise RuntimeError(f"RPC response missing 'result' field from {url}")
+    return int(result, 16)
 
 
 # =============================================================================
 # Transaction Execution Helpers
 # =============================================================================
 
+
 def setup_boa_with_account(
     chain: str,
     private_key: str,
-    rpc_url: Optional[str] = None,
-) -> Tuple[str, Any]:
+    rpc_url: str | None = None,
+) -> tuple[str, Any]:
     """
     Set up titanoboa environment with a signing account.
-    
+
     This configures boa to sign and broadcast transactions using the
     provided private key.
-    
+
     Args:
         chain: Chain name (e.g., 'arcTestnet')
         private_key: Hex-encoded private key
         rpc_url: Optional custom RPC URL
-        
+
     Returns:
         Tuple of (address, boa environment)
     """
     config = get_chain_config(chain)
     url = rpc_url or config.rpc_url
-    
-    # Ensure private key has 0x prefix
-    if not private_key.startswith("0x"):
-        private_key = "0x" + private_key
-    
-    # Get account
+
+    private_key = normalize_private_key(private_key)
+
     account = Account.from_key(private_key)
-    
-    # Set up network environment with the account
-    # titanoboa uses boa.env.add_account() for signing
+
     boa.set_network_env(url)
-    
-    # Clear any existing accounts and add the real signing account
-    # This ensures the correct account is used for transactions
     boa.env.add_account(account, force_eoa=True)
-    
+
     return account.address, boa.env
 
 
@@ -340,46 +321,34 @@ def execute_approve(
     private_key: str,
     spender: str,
     amount: int,
-    rpc_url: Optional[str] = None,
+    rpc_url: str | None = None,
 ) -> str:
     """
     Approve a spender to transfer USDC on behalf of the signer.
-    
-    Uses titanoboa's account system for signing real transactions.
-    
+
     Args:
         chain: Chain name
         private_key: Hex-encoded private key
         spender: Address to approve (e.g., Gateway contract)
         amount: Amount to approve (raw, 6 decimals)
         rpc_url: Optional custom RPC URL
-        
+
     Returns:
         Transaction hash
-        
-    Note:
-        Requires the account to have gas tokens for transaction fees.
-        On Arc Testnet, the sentinel contract wraps native USDC as ERC-20,
-        so approvals are still needed.
     """
     config = get_chain_config(chain)
-    address, env = setup_boa_with_account(chain, private_key, rpc_url)
-    
-    # Load USDC contract - factory.at(address) to get contract instance
+    setup_boa_with_account(chain, private_key, rpc_url)
+
     factory = boa.loads_abi(json.dumps(ERC20_ABI))
     usdc = factory.at(config.usdc_address)
-    
-    # Execute approve transaction
-    # After add_account(), boa uses that account for signing transactions
-    # The account added in setup_boa_with_account is used automatically
+
     tx = usdc.approve(spender, amount)
-    
-    # Return tx hash (boa returns the result, tx hash is in env)
-    # For network transactions, we need to get the tx hash differently
+
     try:
-        # Try to get last tx hash from boa environment
-        if hasattr(boa.env, 'last_tx') and boa.env.last_tx:
-            return boa.env.last_tx.hex() if hasattr(boa.env.last_tx, 'hex') else str(boa.env.last_tx)
+        if hasattr(boa.env, "last_tx") and boa.env.last_tx:
+            return (
+                boa.env.last_tx.hex() if hasattr(boa.env.last_tx, "hex") else str(boa.env.last_tx)
+            )
         return str(tx) if tx else ""
     except Exception:
         return str(tx) if tx else ""
@@ -389,59 +358,84 @@ def execute_deposit(
     chain: str,
     private_key: str,
     amount: int,
-    rpc_url: Optional[str] = None,
+    rpc_url: str | None = None,
 ) -> str:
     """
     Deposit USDC into the Gateway contract.
-    
-    Uses titanoboa's account system for signing real transactions.
-    
-    Note: Requires prior approval of the Gateway contract to spend USDC.
-          On Arc, the sentinel contract at 0x3600... makes native USDC ERC-20 compatible.
-    
+
     Args:
         chain: Chain name
         private_key: Hex-encoded private key
         amount: Amount to deposit (raw, 6 decimals)
         rpc_url: Optional custom RPC URL
-        
+
     Returns:
         Transaction hash
-        
-    Note:
-        Requires the account to have:
-        1. USDC approved for the Gateway contract (ERC-20 chains only)
-        2. Gas tokens for transaction fees
     """
     config = get_chain_config(chain)
-    address, env = setup_boa_with_account(chain, private_key, rpc_url)
-    
-    # Load Gateway contract - factory.at(address) to get contract instance
+    setup_boa_with_account(chain, private_key, rpc_url)
+
     factory = boa.loads_abi(json.dumps(GATEWAY_WALLET_ABI))
     gateway = factory.at(config.gateway_address)
-    
-    # All chains use ERC-20 compatible USDC now (Arc has a sentinel wrapper)
-    # deposit(token, value) - requires prior approval
+
     try:
         tx = gateway.deposit(config.usdc_address, amount)
     except Exception as e:
-        # Titanoboa may throw an error even on successful transactions
-        # when debug_traceTransaction is not available. Check if the error
-        # message contains a transaction hash (indicating it was broadcast).
         error_str = str(e)
         if "0x" in error_str and len(error_str) > 100:
-            # Transaction was likely broadcast but titanoboa couldn't verify
-            # Extract tx hash if possible from environment
-            if hasattr(boa.env, 'last_tx') and boa.env.last_tx:
-                tx_hash = boa.env.last_tx.hex() if hasattr(boa.env.last_tx, 'hex') else str(boa.env.last_tx)
+            if hasattr(boa.env, "last_tx") and boa.env.last_tx:
+                tx_hash = (
+                    boa.env.last_tx.hex()
+                    if hasattr(boa.env.last_tx, "hex")
+                    else str(boa.env.last_tx)
+                )
                 return tx_hash
-            # Return empty - transaction may have succeeded
             return ""
         raise
-    
+
     try:
-        if hasattr(boa.env, 'last_tx') and boa.env.last_tx:
-            return boa.env.last_tx.hex() if hasattr(boa.env.last_tx, 'hex') else str(boa.env.last_tx)
+        if hasattr(boa.env, "last_tx") and boa.env.last_tx:
+            return (
+                boa.env.last_tx.hex() if hasattr(boa.env.last_tx, "hex") else str(boa.env.last_tx)
+            )
+        return str(tx) if tx else ""
+    except Exception:
+        return str(tx) if tx else ""
+
+
+def execute_gateway_mint(
+    chain: str,
+    private_key: str,
+    attestation: bytes,
+    signature: bytes,
+    rpc_url: str | None = None,
+) -> str:
+    """
+    Call gatewayMint on the destination chain's minter contract.
+
+    Args:
+        chain: Chain name
+        private_key: Hex-encoded private key
+        attestation: Attestation payload bytes
+        signature: Signature bytes
+        rpc_url: Optional custom RPC URL
+
+    Returns:
+        Transaction hash
+    """
+    config = get_chain_config(chain)
+    setup_boa_with_account(chain, private_key, rpc_url)
+
+    factory = boa.loads_abi(json.dumps(GATEWAY_MINTER_ABI))
+    minter = factory.at(config.gateway_minter)
+
+    tx = minter.gatewayMint(attestation, signature)
+
+    try:
+        if hasattr(boa.env, "last_tx") and boa.env.last_tx:
+            return (
+                boa.env.last_tx.hex() if hasattr(boa.env.last_tx, "hex") else str(boa.env.last_tx)
+            )
         return str(tx) if tx else ""
     except Exception:
         return str(tx) if tx else ""
@@ -451,80 +445,230 @@ def check_allowance(
     chain: str,
     owner: str,
     spender: str,
-    rpc_url: Optional[str] = None,
+    rpc_url: str | None = None,
 ) -> int:
     """
     Check USDC allowance for a spender.
-    
+
     Args:
         chain: Chain name
         owner: Token owner address
         spender: Spender address (e.g., Gateway)
         rpc_url: Optional custom RPC URL
-        
+
     Returns:
         Current allowance (raw, 6 decimals)
     """
     config = get_chain_config(chain)
     setup_boa_env(chain, rpc_url)
-    
-    # factory.at(address) to get contract instance
+
     factory = boa.loads_abi(json.dumps(ERC20_ABI))
     usdc = factory.at(config.usdc_address)
-    return usdc.allowance(owner, spender)
+    result: int = usdc.allowance(owner, spender)
+    return result
+
+
+def get_withdrawal_delay(
+    chain: str,
+    rpc_url: str | None = None,
+) -> int:
+    """
+    Get the trustless withdrawal delay (in blocks) from the Gateway contract.
+
+    Args:
+        chain: Chain name
+        rpc_url: Optional custom RPC URL
+
+    Returns:
+        Withdrawal delay in blocks
+    """
+    setup_boa_env(chain, rpc_url)
+
+    factory = boa.loads_abi(json.dumps(GATEWAY_WALLET_ABI))
+    config = get_chain_config(chain)
+    gateway = factory.at(config.gateway_address)
+    result: int = gateway.withdrawalDelay()
+    return result
+
+
+def get_withdrawal_block(
+    chain: str,
+    address: str,
+    rpc_url: str | None = None,
+) -> int:
+    """
+    Get the block number at which a trustless withdrawal becomes completable.
+
+    Args:
+        chain: Chain name
+        address: Depositor address
+        rpc_url: Optional custom RPC URL
+
+    Returns:
+        Block number (0 if no pending withdrawal)
+    """
+    config = get_chain_config(chain)
+    setup_boa_env(chain, rpc_url)
+
+    factory = boa.loads_abi(json.dumps(GATEWAY_WALLET_ABI))
+    gateway = factory.at(config.gateway_address)
+    result: int = gateway.withdrawalBlock(config.usdc_address, address)
+    return result
+
+
+def execute_initiate_withdrawal(
+    chain: str,
+    private_key: str,
+    amount: int,
+    rpc_url: str | None = None,
+) -> str:
+    """
+    Initiate a trustless withdrawal from the Gateway contract.
+
+    Args:
+        chain: Chain name
+        private_key: Hex-encoded private key
+        amount: Amount to withdraw (raw, 6 decimals)
+        rpc_url: Optional custom RPC URL
+
+    Returns:
+        Transaction hash
+    """
+    config = get_chain_config(chain)
+    setup_boa_with_account(chain, private_key, rpc_url)
+
+    factory = boa.loads_abi(json.dumps(GATEWAY_WALLET_ABI))
+    gateway = factory.at(config.gateway_address)
+
+    tx = gateway.initiateWithdrawal(config.usdc_address, amount)
+
+    try:
+        if hasattr(boa.env, "last_tx") and boa.env.last_tx:
+            return (
+                boa.env.last_tx.hex() if hasattr(boa.env.last_tx, "hex") else str(boa.env.last_tx)
+            )
+        return str(tx) if tx else ""
+    except Exception:
+        return str(tx) if tx else ""
+
+
+def execute_complete_withdrawal(
+    chain: str,
+    private_key: str,
+    rpc_url: str | None = None,
+) -> str:
+    """
+    Complete a trustless withdrawal from the Gateway contract.
+
+    Args:
+        chain: Chain name
+        private_key: Hex-encoded private key
+        rpc_url: Optional custom RPC URL
+
+    Returns:
+        Transaction hash
+    """
+    config = get_chain_config(chain)
+    setup_boa_with_account(chain, private_key, rpc_url)
+
+    factory = boa.loads_abi(json.dumps(GATEWAY_WALLET_ABI))
+    gateway = factory.at(config.gateway_address)
+
+    tx = gateway.withdraw(config.usdc_address)
+
+    try:
+        if hasattr(boa.env, "last_tx") and boa.env.last_tx:
+            return (
+                boa.env.last_tx.hex() if hasattr(boa.env.last_tx, "hex") else str(boa.env.last_tx)
+            )
+        return str(tx) if tx else ""
+    except Exception:
+        return str(tx) if tx else ""
+
+
+def execute_deposit_for(
+    chain: str,
+    private_key: str,
+    depositor: str,
+    amount: int,
+    rpc_url: str | None = None,
+) -> str:
+    """
+    Deposit USDC into the Gateway contract on behalf of another address.
+
+    Args:
+        chain: Chain name
+        private_key: Hex-encoded private key
+        depositor: Address to credit the deposit to
+        amount: Amount to deposit (raw, 6 decimals)
+        rpc_url: Optional custom RPC URL
+
+    Returns:
+        Transaction hash
+    """
+    config = get_chain_config(chain)
+    setup_boa_with_account(chain, private_key, rpc_url)
+
+    factory = boa.loads_abi(json.dumps(GATEWAY_WALLET_ABI))
+    gateway = factory.at(config.gateway_address)
+
+    tx = gateway.depositFor(config.usdc_address, depositor, amount)
+
+    try:
+        if hasattr(boa.env, "last_tx") and boa.env.last_tx:
+            return (
+                boa.env.last_tx.hex() if hasattr(boa.env.last_tx, "hex") else str(boa.env.last_tx)
+            )
+        return str(tx) if tx else ""
+    except Exception:
+        return str(tx) if tx else ""
 
 
 def get_usdc_balance(
     chain: str,
     address: str,
-    rpc_url: Optional[str] = None,
+    rpc_url: str | None = None,
 ) -> int:
     """
     Get USDC balance for an address.
-    
+
     Args:
         chain: Chain name
         address: Address to check
         rpc_url: Optional custom RPC URL
-        
+
     Returns:
         Balance (raw, 6 decimals)
-        
-    Note:
-        On Arc Testnet, USDC is the native gas token, but there's a sentinel
-        contract at 0x3600... that wraps it as ERC-20 with 6 decimals.
     """
     config = get_chain_config(chain)
     setup_boa_env(chain, rpc_url)
-    
-    # All chains use ERC-20 compatible USDC
-    # Arc has a sentinel contract at 0x3600... that wraps native USDC as ERC-20
+
     factory = boa.loads_abi(json.dumps(ERC20_ABI))
     usdc = factory.at(config.usdc_address)
-    return usdc.balanceOf(address)
+    result: int = usdc.balanceOf(address)
+    return result
 
 
 def get_gateway_balance(
     chain: str,
     address: str,
-    rpc_url: Optional[str] = None,
+    rpc_url: str | None = None,
 ) -> int:
     """
     Get Gateway balance for an address.
-    
+
     Args:
         chain: Chain name
         address: Address to check
         rpc_url: Optional custom RPC URL
-        
+
     Returns:
         Balance (raw, 6 decimals)
     """
     config = get_chain_config(chain)
     setup_boa_env(chain, rpc_url)
-    
-    # factory.at(address) to get contract instance
+
     factory = boa.loads_abi(json.dumps(GATEWAY_WALLET_ABI))
     gateway = factory.at(config.gateway_address)
-    # balanceOf(token, depositor)
-    return gateway.balanceOf(config.usdc_address, address)
+    result: int = gateway.totalBalance(config.usdc_address, address)
+    return result

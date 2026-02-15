@@ -1,479 +1,1101 @@
 """
-AgentWalletManager Tests for circlekit-py
+Tests for circlekit.wallets — CircleWalletSigner and CircleTxExecutor adapters.
 
-Tests for Circle Programmable Wallets integration.
+All tests mock the Circle SDK — no live API calls.
 
-These tests require:
-- CIRCLE_API_KEY environment variable
-- CIRCLE_ENTITY_SECRET environment variable
-
-Run with: CIRCLE_API_KEY=... CIRCLE_ENTITY_SECRET=... pytest tests/test_wallets.py -v
-
-Note: Some tests create real wallet sets and wallets in your Circle account.
+Run with: uv run pytest tests/test_wallets.py -v
 """
 
+import json
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
+import httpx
 import pytest
-import os
-from unittest.mock import patch, MagicMock
-from dataclasses import fields
+from circlekit.signer import Signer
+from circlekit.tx_executor import TxExecutor
 
-# Check if we have Circle credentials
-HAS_CIRCLE_CREDS = bool(
-    os.environ.get("CIRCLE_API_KEY") and os.environ.get("CIRCLE_ENTITY_SECRET")
-)
-SKIP_REASON = "CIRCLE_API_KEY or CIRCLE_ENTITY_SECRET not set"
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
+FAKE_WALLET_ID = "test-wallet-id-123"
+FAKE_ADDRESS = "0x1234567890abcdef1234567890abcdef12345678"
+FAKE_API_KEY = "TEST_API_KEY_abc123"
+FAKE_ENTITY_SECRET = "a" * 64  # 32-byte hex string
 
-# =============================================================================
-# UNIT TESTS (No credentials required)
-# =============================================================================
+SAMPLE_DOMAIN = {
+    "name": "CircleBatching",
+    "version": "1",
+    "chainId": 5042002,
+    "verifyingContract": "0x0000000000000000000000000000000000000001",
+}
 
-class TestAgentWalletDataClasses:
-    """Test data class structures."""
-    
-    def test_agent_wallet_fields(self):
-        """AgentWallet should have correct fields."""
-        from circlekit.wallets import AgentWallet
-        
-        field_names = {f.name for f in fields(AgentWallet)}
-        
-        assert "wallet_id" in field_names
-        assert "address" in field_names
-        assert "blockchain" in field_names
-        assert "name" in field_names
-        assert "state" in field_names
-        assert "wallet_set_id" in field_names
-    
-    def test_wallet_set_fields(self):
-        """WalletSet should have correct fields."""
-        from circlekit.wallets import WalletSet
-        
-        field_names = {f.name for f in fields(WalletSet)}
-        
-        assert "wallet_set_id" in field_names
-        assert "name" in field_names
-        assert "custody_type" in field_names
-    
-    def test_signature_result_fields(self):
-        """SignatureResult should have correct fields."""
-        from circlekit.wallets import SignatureResult
-        
-        field_names = {f.name for f in fields(SignatureResult)}
-        
-        assert "signature" in field_names
-        assert "wallet_id" in field_names
+SAMPLE_TYPES = {
+    "Transfer": [
+        {"name": "to", "type": "address"},
+        {"name": "amount", "type": "uint256"},
+    ],
+}
 
 
-class TestBlockchainMapping:
-    """Test blockchain name normalization."""
-    
-    def test_testnet_mappings(self):
-        """Testnet chains should map correctly."""
-        from circlekit.wallets import BLOCKCHAIN_MAPPING
-        
-        assert BLOCKCHAIN_MAPPING["arcTestnet"] == "ARC-TESTNET"
-        assert BLOCKCHAIN_MAPPING["baseSepolia"] == "BASE-SEPOLIA"
-        assert BLOCKCHAIN_MAPPING["ethereumSepolia"] == "ETH-SEPOLIA"
-        assert BLOCKCHAIN_MAPPING["avalancheFuji"] == "AVAX-FUJI"
-    
-    def test_mainnet_mappings(self):
-        """Mainnet chains should map correctly."""
-        from circlekit.wallets import BLOCKCHAIN_MAPPING
-        
-        assert BLOCKCHAIN_MAPPING["ethereum"] == "ETH"
-        assert BLOCKCHAIN_MAPPING["base"] == "BASE"
-        assert BLOCKCHAIN_MAPPING["polygon"] == "MATIC"
-        assert BLOCKCHAIN_MAPPING["arbitrum"] == "ARB"
-        assert BLOCKCHAIN_MAPPING["avalanche"] == "AVAX"
-        assert BLOCKCHAIN_MAPPING["optimism"] == "OP"
-    
-    def test_alternate_formats(self):
-        """Alternate format names should also work."""
-        from circlekit.wallets import BLOCKCHAIN_MAPPING
-        
-        # Both formats should map to the same value
-        assert BLOCKCHAIN_MAPPING["ARC_TESTNET"] == "ARC-TESTNET"
-        assert BLOCKCHAIN_MAPPING["BASE_SEPOLIA"] == "BASE-SEPOLIA"
+# A stand-in for SignTypedDataRequest that captures constructor kwargs
+class _FakeSignTypedDataRequest:
+    def __init__(self, *, walletId=None, data=None, **kwargs):
+        self.wallet_id = walletId
+        self.data = data
+        self.entity_secret_ciphertext = kwargs.get("entitySecretCiphertext", "#REFILL_PLACEHOLDER")
 
 
-class TestAgentWalletManagerInit:
-    """Test AgentWalletManager initialization."""
-    
-    def test_requires_api_key(self):
-        """Should raise error without API key."""
-        from circlekit.wallets import AgentWalletManager
-        
-        # Clear env vars temporarily
-        with patch.dict(os.environ, {"CIRCLE_API_KEY": "", "CIRCLE_ENTITY_SECRET": "test"}):
-            with pytest.raises(ValueError) as exc_info:
-                AgentWalletManager(api_key=None)
-            
-            assert "API key required" in str(exc_info.value)
-    
-    def test_requires_entity_secret(self):
-        """Should raise error without entity secret."""
-        from circlekit.wallets import AgentWalletManager
-        
-        with patch.dict(os.environ, {"CIRCLE_API_KEY": "test", "CIRCLE_ENTITY_SECRET": ""}):
-            with pytest.raises(ValueError) as exc_info:
-                AgentWalletManager(api_key="test", entity_secret=None)
-            
-            assert "entity secret required" in str(exc_info.value)
-    
-    def test_accepts_params_directly(self):
-        """Should accept credentials as parameters."""
-        from circlekit.wallets import AgentWalletManager
-        
-        # Mock the Circle SDK initialization
-        with patch("circlekit.wallets.init_developer_controlled_wallets_client"):
-            with patch("circlekit.wallets.generate_entity_secret_ciphertext"):
-                with patch("circlekit.wallets.WalletsApi"):
-                    with patch("circlekit.wallets.WalletSetsApi"):
-                        with patch("circlekit.wallets.SigningApi"):
-                            manager = AgentWalletManager(
-                                api_key="test-api-key",
-                                entity_secret="test-entity-secret"
-                            )
-                            
-                            assert manager._api_key == "test-api-key"
-                            assert manager._entity_secret == "test-entity-secret"
-    
-    def test_reads_from_env_vars(self):
-        """Should read credentials from environment variables."""
-        from circlekit.wallets import AgentWalletManager
-        
-        with patch.dict(os.environ, {
-            "CIRCLE_API_KEY": "env-api-key",
-            "CIRCLE_ENTITY_SECRET": "env-entity-secret"
-        }):
-            with patch("circlekit.wallets.init_developer_controlled_wallets_client"):
-                with patch("circlekit.wallets.generate_entity_secret_ciphertext"):
-                    with patch("circlekit.wallets.WalletsApi"):
-                        with patch("circlekit.wallets.WalletSetsApi"):
-                            with patch("circlekit.wallets.SigningApi"):
-                                manager = AgentWalletManager()
-                                
-                                assert manager._api_key == "env-api-key"
-                                assert manager._entity_secret == "env-entity-secret"
+class _FakeContractExecutionRequest:
+    """Stand-in for CreateContractExecutionTransactionForDeveloperRequest."""
+
+    def __init__(self, **kwargs):
+        self.wallet_id = kwargs.get("walletId")
+        self.contract_address = kwargs.get("contractAddress")
+        self.abi_function_signature = kwargs.get("abiFunctionSignature")
+        self.abi_parameters = kwargs.get("abiParameters", [])
+        self.fee_level = kwargs.get("feeLevel")
 
 
-class TestHelperFunction:
-    """Test the create_agent_wallet_manager helper."""
-    
-    def test_create_agent_wallet_manager_exists(self):
-        """Helper function should be importable."""
-        from circlekit.wallets import create_agent_wallet_manager
-        
-        assert callable(create_agent_wallet_manager)
-    
-    def test_creates_manager_instance(self):
-        """Helper should create AgentWalletManager instance."""
-        from circlekit.wallets import create_agent_wallet_manager, AgentWalletManager
-        
-        with patch.dict(os.environ, {
-            "CIRCLE_API_KEY": "test-key",
-            "CIRCLE_ENTITY_SECRET": "test-secret"
-        }):
-            with patch("circlekit.wallets.init_developer_controlled_wallets_client"):
-                with patch("circlekit.wallets.generate_entity_secret_ciphertext"):
-                    with patch("circlekit.wallets.WalletsApi"):
-                        with patch("circlekit.wallets.WalletSetsApi"):
-                            with patch("circlekit.wallets.SigningApi"):
-                                manager = create_agent_wallet_manager()
-                                
-                                assert isinstance(manager, AgentWalletManager)
+class _FakeAbiParametersInner:
+    """Stand-in for AbiParametersInner — stores a plain value (str/int/bool/list)."""
+
+    def __init__(self, value):
+        self.actual_instance = value
+
+    def __eq__(self, other):
+        if isinstance(other, _FakeAbiParametersInner):
+            return self.actual_instance == other.actual_instance
+        return NotImplemented
+
+    def __repr__(self):
+        return f"AbiParametersInner({self.actual_instance!r})"
 
 
-# =============================================================================
-# MOCK TESTS (Simulate Circle API responses)
-# =============================================================================
+class _FakeFeeLevel:
+    """Stand-in for FeeLevel enum."""
 
-class TestMockedWalletOperations:
-    """Test wallet operations with mocked Circle API."""
-    
-    @pytest.fixture
-    def mock_manager(self):
-        """Create a manager with mocked Circle SDK."""
-        from circlekit.wallets import AgentWalletManager
-        
-        with patch.dict(os.environ, {
-            "CIRCLE_API_KEY": "test-key",
-            "CIRCLE_ENTITY_SECRET": "test-secret"
-        }):
-            with patch("circlekit.wallets.init_developer_controlled_wallets_client"):
-                with patch("circlekit.wallets.generate_entity_secret_ciphertext") as mock_cipher:
-                    mock_cipher.return_value = "mock-ciphertext"
-                    with patch("circlekit.wallets.WalletsApi") as mock_wallets:
-                        with patch("circlekit.wallets.WalletSetsApi") as mock_sets:
-                            with patch("circlekit.wallets.SigningApi") as mock_signing:
-                                manager = AgentWalletManager()
-                                manager._mock_wallets_api = mock_wallets.return_value
-                                manager._mock_wallet_sets_api = mock_sets.return_value
-                                manager._mock_signing_api = mock_signing.return_value
-                                yield manager
-    
-    def test_normalize_blockchain_arc(self, mock_manager):
-        """Should normalize arcTestnet to ARC-TESTNET."""
-        result = mock_manager._normalize_blockchain("arcTestnet")
-        assert result == "ARC-TESTNET"
-    
-    def test_normalize_blockchain_passthrough(self, mock_manager):
-        """Unknown blockchain names should pass through."""
-        result = mock_manager._normalize_blockchain("UNKNOWN-CHAIN")
-        assert result == "UNKNOWN-CHAIN"
-    
-    def test_generate_idempotency_key(self, mock_manager):
-        """Should generate unique idempotency keys."""
-        key1 = mock_manager._generate_idempotency_key()
-        key2 = mock_manager._generate_idempotency_key()
-        
-        assert key1 != key2
-        # Should be valid UUID format
-        assert len(key1) == 36  # UUID format: 8-4-4-4-12
+    def __init__(self, value):
+        self.value = value
 
 
-# =============================================================================
-# INTEGRATION TESTS (Require Circle credentials)
-# =============================================================================
+@pytest.fixture()
+def circle_mocks():
+    """Patch all Circle SDK symbols in circlekit.wallets for the duration of a test."""
+    with (
+        patch("circlekit.wallets.HAS_CIRCLE_WALLETS", True),
+        patch("circlekit.wallets.init_developer_controlled_wallets_client") as mock_init,
+        patch("circlekit.wallets.SigningApi") as mock_signing_cls,
+        patch("circlekit.wallets.WalletsApi") as mock_wallets_cls,
+        patch("circlekit.wallets.TransactionsApi") as mock_transactions_cls,
+        patch("circlekit.wallets.SignTypedDataRequest", _FakeSignTypedDataRequest),
+        patch(
+            "circlekit.wallets.CreateContractExecutionTransactionForDeveloperRequest",
+            _FakeContractExecutionRequest,
+        ),
+        patch("circlekit.wallets.AbiParametersInner", _FakeAbiParametersInner),
+        patch("circlekit.wallets.FeeLevel", _FakeFeeLevel),
+    ):
+        mock_init.return_value = MagicMock()
+        mock_signing_api = MagicMock()
+        mock_signing_cls.return_value = mock_signing_api
+        mock_wallets_api = MagicMock()
+        mock_wallets_cls.return_value = mock_wallets_api
+        mock_transactions_api = MagicMock()
+        mock_transactions_cls.return_value = mock_transactions_api
 
-class TestLiveWalletOperations:
-    """Test against real Circle API.
-    
-    ⚠️  These tests create real resources in your Circle account!
-    """
-    
-    @pytest.fixture
-    def live_manager(self):
-        """Create a manager with real Circle credentials."""
-        if not HAS_CIRCLE_CREDS:
-            pytest.skip(SKIP_REASON)
-        
-        from circlekit.wallets import AgentWalletManager
-        return AgentWalletManager()
-    
-    @pytest.mark.skipif(not HAS_CIRCLE_CREDS, reason=SKIP_REASON)
-    def test_list_wallet_sets(self, live_manager):
-        """Should list wallet sets from Circle API."""
-        wallet_sets = live_manager.list_wallet_sets()
-        
-        print(f"\nFound {len(wallet_sets)} wallet set(s)")
-        for ws in wallet_sets:
-            print(f"  - {ws.name} ({ws.wallet_set_id})")
-        
-        # Should return a list (even if empty)
-        assert isinstance(wallet_sets, list)
-    
-    @pytest.mark.skipif(not HAS_CIRCLE_CREDS, reason=SKIP_REASON)
-    def test_list_wallets(self, live_manager):
-        """Should list wallets from Circle API."""
-        wallets = live_manager.list_wallets()
-        
-        print(f"\nFound {len(wallets)} wallet(s)")
-        for w in wallets[:5]:  # Show first 5
-            print(f"  - {w.name}: {w.address} ({w.blockchain})")
-        
-        # Should return a list (even if empty)
-        assert isinstance(wallets, list)
-    
-    @pytest.mark.skipif(not HAS_CIRCLE_CREDS, reason=SKIP_REASON)
-    def test_create_wallet_set(self, live_manager):
-        """Should create a new wallet set.
-        
-        ⚠️  This creates a real wallet set in your Circle account!
-        """
-        import uuid
-        
-        # Use unique name to avoid conflicts
-        name = f"pytest-{uuid.uuid4().hex[:8]}"
-        
-        wallet_set = live_manager.create_wallet_set(name)
-        
-        print(f"\nCreated wallet set:")
-        print(f"  - ID: {wallet_set.wallet_set_id}")
-        print(f"  - Name: {wallet_set.name}")
-        
-        assert wallet_set.wallet_set_id is not None
-        assert len(wallet_set.wallet_set_id) > 0
-    
-    @pytest.mark.skipif(not HAS_CIRCLE_CREDS, reason=SKIP_REASON)
-    def test_create_wallet(self, live_manager):
-        """Should create a new wallet on Arc Testnet.
-        
-        ⚠️  This creates a real wallet in your Circle account!
-        """
-        import uuid
-        
-        # First, get or create a wallet set
-        wallet_sets = live_manager.list_wallet_sets()
-        
-        if wallet_sets:
-            wallet_set_id = wallet_sets[0].wallet_set_id
-            print(f"\nUsing existing wallet set: {wallet_set_id}")
-        else:
-            # Create a new wallet set
-            ws = live_manager.create_wallet_set(f"pytest-{uuid.uuid4().hex[:8]}")
-            wallet_set_id = ws.wallet_set_id
-            print(f"\nCreated wallet set: {wallet_set_id}")
-        
-        # Create a wallet
-        wallet_name = f"pytest-agent-{uuid.uuid4().hex[:8]}"
-        
-        wallet = live_manager.create_wallet(
-            wallet_set_id=wallet_set_id,
-            name=wallet_name,
-            blockchain="arcTestnet"
-        )
-        
-        print(f"\nCreated wallet:")
-        print(f"  - ID: {wallet.wallet_id}")
-        print(f"  - Address: {wallet.address}")
-        print(f"  - Blockchain: {wallet.blockchain}")
-        print(f"  - State: {wallet.state}")
-        
-        assert wallet.wallet_id is not None
-        assert wallet.address is not None
-        assert wallet.address.startswith("0x")
-        assert len(wallet.address) == 42
-    
-    @pytest.mark.skipif(not HAS_CIRCLE_CREDS, reason=SKIP_REASON)
-    def test_sign_message(self, live_manager):
-        """Should sign a message using a Circle wallet.
-        
-        ⚠️  Requires at least one wallet to exist!
-        """
-        wallets = live_manager.list_wallets()
-        
-        if not wallets:
-            pytest.skip("No wallets available for signing test")
-        
-        wallet = wallets[0]
-        message = "Hello from circlekit-py test!"
-        
-        print(f"\nSigning message with wallet {wallet.wallet_id}")
-        print(f"  Message: {message}")
-        
-        result = live_manager.sign_message(wallet.wallet_id, message)
-        
-        print(f"  Signature: {result.signature[:40]}...")
-        
-        assert result.signature is not None
-        assert result.signature.startswith("0x")
-        assert len(result.signature) > 50  # Should be a real signature
-    
-    @pytest.mark.skipif(not HAS_CIRCLE_CREDS, reason=SKIP_REASON)
-    def test_sign_typed_data(self, live_manager):
-        """Should sign EIP-712 typed data.
-        
-        ⚠️  Requires at least one wallet to exist!
-        """
-        wallets = live_manager.list_wallets()
-        
-        if not wallets:
-            pytest.skip("No wallets available for signing test")
-        
-        wallet = wallets[0]
-        
-        # EIP-712 typed data for a payment
-        typed_data = {
-            "types": {
-                "EIP712Domain": [
-                    {"name": "name", "type": "string"},
-                    {"name": "version", "type": "string"},
-                    {"name": "chainId", "type": "uint256"},
-                ],
-                "Message": [
-                    {"name": "content", "type": "string"},
-                ],
-            },
-            "primaryType": "Message",
-            "domain": {
-                "name": "Test",
-                "version": "1",
-                "chainId": 5042002,  # Arc Testnet
-            },
-            "message": {
-                "content": "Test typed data signing",
-            },
+        yield {
+            "init": mock_init,
+            "signing_api": mock_signing_api,
+            "wallets_api": mock_wallets_api,
+            "transactions_api": mock_transactions_api,
         }
-        
-        print(f"\nSigning typed data with wallet {wallet.wallet_id}")
-        
-        result = live_manager.sign_typed_data(wallet.wallet_id, typed_data)
-        
-        print(f"  Signature: {result.signature[:40]}...")
-        
-        assert result.signature is not None
-        assert result.signature.startswith("0x")
-    
-    @pytest.mark.skipif(not HAS_CIRCLE_CREDS, reason=SKIP_REASON)
-    def test_get_wallet_balance(self, live_manager):
-        """Should get wallet token balances.
-        
-        ⚠️  Requires at least one wallet to exist!
-        """
-        wallets = live_manager.list_wallets()
-        
-        if not wallets:
-            pytest.skip("No wallets available for balance test")
-        
-        wallet = wallets[0]
-        
-        print(f"\nGetting balance for wallet {wallet.wallet_id}")
-        
-        balances = live_manager.get_wallet_balance(wallet.wallet_id)
-        
-        print(f"  Found {len(balances)} token(s):")
-        for b in balances:
-            print(f"    - {b['token']}: {b['amount']}")
-        
-        # Should return a list (even if empty)
-        assert isinstance(balances, list)
 
 
-# =============================================================================
-# EXPORT TESTS
-# =============================================================================
+def _make_signer(circle_mocks, wallet_address=FAKE_ADDRESS):
+    """Create a CircleWalletSigner inside an active circle_mocks context."""
+    from circlekit.wallets import CircleWalletSigner
 
-class TestExports:
-    """Test that wallet classes are properly exported."""
-    
-    def test_agentwalletmanager_importable_from_circlekit(self):
-        """AgentWalletManager should be importable from circlekit."""
-        from circlekit import AgentWalletManager
-        assert AgentWalletManager is not None
-    
-    def test_agentwallet_importable(self):
-        """AgentWallet dataclass should be importable."""
-        from circlekit.wallets import AgentWallet
-        assert AgentWallet is not None
-    
-    def test_walletset_importable(self):
-        """WalletSet dataclass should be importable."""
-        from circlekit.wallets import WalletSet
-        assert WalletSet is not None
-    
-    def test_create_agent_wallet_manager_importable(self):
-        """Helper function should be importable from circlekit."""
-        from circlekit import create_agent_wallet_manager
-        assert callable(create_agent_wallet_manager)
+    signer = CircleWalletSigner(
+        wallet_id=FAKE_WALLET_ID,
+        wallet_address=wallet_address,
+        api_key=FAKE_API_KEY,
+        entity_secret=FAKE_ENTITY_SECRET,
+    )
+    return signer
 
 
-# =============================================================================
-# SUMMARY
-# =============================================================================
+def _mock_sign_response(mock_signing_api, signature):
+    """Configure mock signing API to return given signature."""
+    mock_response = MagicMock()
+    mock_response.data.signature = signature
+    mock_signing_api.sign_typed_data.return_value = mock_response
 
-if __name__ == "__main__":
-    print("""
-    ╔══════════════════════════════════════════════════════════════════╗
-    ║              AGENT WALLET MANAGER TESTS                           ║
-    ╠══════════════════════════════════════════════════════════════════╣
-    ║ Unit tests: Run without credentials                               ║
-    ║ Integration tests: Require CIRCLE_API_KEY & CIRCLE_ENTITY_SECRET  ║
-    ║                                                                   ║
-    ║ Run all: pytest tests/test_wallets.py -v                          ║
-    ║ Run unit only: pytest tests/test_wallets.py -v -k "not Live"      ║
-    ║                                                                   ║
-    ║ ⚠️  Integration tests create real resources in Circle!            ║
-    ╚══════════════════════════════════════════════════════════════════╝
-    """)
-    pytest.main([__file__, "-v"])
+
+# ---------------------------------------------------------------------------
+# Protocol conformance
+# ---------------------------------------------------------------------------
+
+
+class TestCircleWalletSignerProtocol:
+    """Verify CircleWalletSigner satisfies the Signer protocol."""
+
+    def test_satisfies_signer_protocol(self, circle_mocks):
+        signer = _make_signer(circle_mocks)
+        assert isinstance(signer, Signer)
+
+    def test_address_property(self, circle_mocks):
+        signer = _make_signer(circle_mocks)
+        assert signer.address == FAKE_ADDRESS
+
+    def test_sign_typed_data_calls_circle_api(self, circle_mocks):
+        signer = _make_signer(circle_mocks)
+        mock_signing_api = circle_mocks["signing_api"]
+
+        sig_hex = "ab" * 65
+        _mock_sign_response(mock_signing_api, "0x" + sig_hex)
+
+        result = signer.sign_typed_data(
+            domain=SAMPLE_DOMAIN,
+            types=SAMPLE_TYPES,
+            primary_type="Transfer",
+            message={"to": "0xdead", "amount": 100},
+        )
+
+        # Verify the API was called with the request as positional arg
+        mock_signing_api.sign_typed_data.assert_called_once()
+        call_args = mock_signing_api.sign_typed_data.call_args
+        request = call_args.args[0]
+
+        # walletId is inside the request, not a separate param
+        assert request.wallet_id == FAKE_WALLET_ID
+
+        # Verify the EIP-712 payload
+        data = json.loads(request.data)
+        assert data["primaryType"] == "Transfer"
+        assert "EIP712Domain" in data["types"]
+        assert data["domain"] == SAMPLE_DOMAIN
+
+        assert result == "0x" + sig_hex
+
+    def test_sign_typed_data_does_not_set_ciphertext(self, circle_mocks):
+        """SDK's @auto_fill decorator handles entitySecretCiphertext, we shouldn't set it."""
+        signer = _make_signer(circle_mocks)
+        mock_signing_api = circle_mocks["signing_api"]
+
+        _mock_sign_response(mock_signing_api, "0x" + "00" * 65)
+
+        signer.sign_typed_data(
+            domain=SAMPLE_DOMAIN,
+            types=SAMPLE_TYPES,
+            primary_type="Transfer",
+            message={"to": "0xdead", "amount": 1},
+        )
+
+        request = mock_signing_api.sign_typed_data.call_args.args[0]
+        # Should be the placeholder that the SDK's @auto_fill decorator replaces
+        assert request.entity_secret_ciphertext == "#REFILL_PLACEHOLDER"
+
+    def test_sign_typed_data_returns_0x_prefixed(self, circle_mocks):
+        signer = _make_signer(circle_mocks)
+        mock_signing_api = circle_mocks["signing_api"]
+
+        sig_hex = "cd" * 65
+        _mock_sign_response(mock_signing_api, "0x" + sig_hex)
+
+        result = signer.sign_typed_data(
+            domain=SAMPLE_DOMAIN,
+            types=SAMPLE_TYPES,
+            primary_type="Transfer",
+            message={"to": "0xdead", "amount": 1},
+        )
+
+        assert result.startswith("0x")
+
+    def test_sign_typed_data_adds_prefix_when_missing(self, circle_mocks):
+        signer = _make_signer(circle_mocks)
+        mock_signing_api = circle_mocks["signing_api"]
+
+        # Circle returns bare hex without 0x prefix
+        sig_hex = "ef" * 65
+        _mock_sign_response(mock_signing_api, sig_hex)  # no 0x
+
+        result = signer.sign_typed_data(
+            domain=SAMPLE_DOMAIN,
+            types=SAMPLE_TYPES,
+            primary_type="Transfer",
+            message={"to": "0xdead", "amount": 1},
+        )
+
+        assert result == "0x" + sig_hex
+
+    def test_eip712_domain_construction(self, circle_mocks):
+        """Verify EIP712Domain type is built from domain keys present."""
+        signer = _make_signer(circle_mocks)
+        mock_signing_api = circle_mocks["signing_api"]
+
+        _mock_sign_response(mock_signing_api, "0x" + "00" * 65)
+
+        # Domain with only name and chainId
+        partial_domain = {"name": "Test", "chainId": 1}
+
+        signer.sign_typed_data(
+            domain=partial_domain,
+            types=SAMPLE_TYPES,
+            primary_type="Transfer",
+            message={"to": "0xdead", "amount": 1},
+        )
+
+        request = mock_signing_api.sign_typed_data.call_args.args[0]
+        data = json.loads(request.data)
+        domain_fields = {f["name"] for f in data["types"]["EIP712Domain"]}
+        assert domain_fields == {"name", "chainId"}
+
+
+# ---------------------------------------------------------------------------
+# Initialization
+# ---------------------------------------------------------------------------
+
+
+class TestCircleWalletSignerInit:
+    """Test constructor behavior."""
+
+    def test_requires_circle_sdk_installed(self):
+        with patch("circlekit.wallets.HAS_CIRCLE_WALLETS", False):
+            from circlekit.wallets import CircleWalletSigner
+
+            with pytest.raises(ImportError, match="circle-developer-controlled-wallets"):
+                CircleWalletSigner(
+                    wallet_id=FAKE_WALLET_ID,
+                    wallet_address=FAKE_ADDRESS,
+                    api_key=FAKE_API_KEY,
+                    entity_secret=FAKE_ENTITY_SECRET,
+                )
+
+    def test_fetches_address_from_api(self, circle_mocks):
+        """When wallet_address is not provided, fetch via WalletsApi.get_wallet."""
+        mock_wallets_api = circle_mocks["wallets_api"]
+
+        # SDK returns WalletResponse with .data.wallet.address structure
+        wallet_obj = SimpleNamespace(address=FAKE_ADDRESS)
+        wallet_data = SimpleNamespace(wallet=wallet_obj)
+        response = SimpleNamespace(data=wallet_data)
+        mock_wallets_api.get_wallet.return_value = response
+
+        from circlekit.wallets import CircleWalletSigner
+
+        signer = CircleWalletSigner(
+            wallet_id=FAKE_WALLET_ID,
+            api_key=FAKE_API_KEY,
+            entity_secret=FAKE_ENTITY_SECRET,
+        )
+
+        mock_wallets_api.get_wallet.assert_called_once_with(id=FAKE_WALLET_ID)
+        assert signer.address == FAKE_ADDRESS
+
+    def test_fetches_address_from_api_actual_instance_wrapper(self, circle_mocks):
+        """Supports oneOf wrapper shape where wallet address is in actual_instance."""
+        mock_wallets_api = circle_mocks["wallets_api"]
+
+        wallet_obj = SimpleNamespace(actual_instance=SimpleNamespace(address=FAKE_ADDRESS))
+        response = SimpleNamespace(data=SimpleNamespace(wallet=wallet_obj))
+        mock_wallets_api.get_wallet.return_value = response
+
+        from circlekit.wallets import CircleWalletSigner
+
+        signer = CircleWalletSigner(
+            wallet_id=FAKE_WALLET_ID,
+            api_key=FAKE_API_KEY,
+            entity_secret=FAKE_ENTITY_SECRET,
+        )
+
+        assert signer.address == FAKE_ADDRESS
+
+    def test_uses_provided_address(self, circle_mocks):
+        """When wallet_address is provided, skip the API call."""
+        signer = _make_signer(circle_mocks, wallet_address=FAKE_ADDRESS)
+        circle_mocks["wallets_api"].get_wallet.assert_not_called()
+        assert signer.address == FAKE_ADDRESS
+
+    def test_env_var_fallback(self):
+        """Credentials fall back to CIRCLE_API_KEY and CIRCLE_ENTITY_SECRET env vars."""
+        env = {
+            "CIRCLE_API_KEY": "env-api-key",
+            "CIRCLE_ENTITY_SECRET": "b" * 64,
+        }
+        with (
+            patch("circlekit.wallets.HAS_CIRCLE_WALLETS", True),
+            patch.dict("os.environ", env),
+            patch("circlekit.wallets.init_developer_controlled_wallets_client") as mock_init,
+            patch("circlekit.wallets.SigningApi"),
+            patch("circlekit.wallets.WalletsApi"),
+        ):
+            mock_init.return_value = MagicMock()
+
+            from circlekit.wallets import CircleWalletSigner
+
+            signer = CircleWalletSigner(
+                wallet_id=FAKE_WALLET_ID,
+                wallet_address=FAKE_ADDRESS,
+            )
+
+            mock_init.assert_called_once_with(
+                api_key="env-api-key",
+                entity_secret="b" * 64,
+            )
+            assert signer.address == FAKE_ADDRESS
+
+    def test_raises_without_api_key(self):
+        with (
+            patch("circlekit.wallets.HAS_CIRCLE_WALLETS", True),
+            patch.dict("os.environ", {}, clear=True),
+            patch("circlekit.wallets.init_developer_controlled_wallets_client"),
+            patch("circlekit.wallets.SigningApi"),
+            patch("circlekit.wallets.WalletsApi"),
+        ):
+            from circlekit.wallets import CircleWalletSigner
+
+            with pytest.raises(ValueError, match="api_key"):
+                CircleWalletSigner(
+                    wallet_id=FAKE_WALLET_ID,
+                    wallet_address=FAKE_ADDRESS,
+                    entity_secret=FAKE_ENTITY_SECRET,
+                )
+
+    def test_raises_without_entity_secret(self):
+        with (
+            patch("circlekit.wallets.HAS_CIRCLE_WALLETS", True),
+            patch.dict("os.environ", {}, clear=True),
+            patch("circlekit.wallets.init_developer_controlled_wallets_client"),
+            patch("circlekit.wallets.SigningApi"),
+            patch("circlekit.wallets.WalletsApi"),
+        ):
+            from circlekit.wallets import CircleWalletSigner
+
+            with pytest.raises(ValueError, match="entity_secret"):
+                CircleWalletSigner(
+                    wallet_id=FAKE_WALLET_ID,
+                    wallet_address=FAKE_ADDRESS,
+                    api_key=FAKE_API_KEY,
+                )
+
+    def test_repr(self, circle_mocks):
+        signer = _make_signer(circle_mocks)
+        r = repr(signer)
+        assert "CircleWalletSigner" in r
+        assert FAKE_WALLET_ID in r
+        assert FAKE_ADDRESS in r
+
+
+# ---------------------------------------------------------------------------
+# Integration with GatewayClient
+# ---------------------------------------------------------------------------
+
+
+class TestCircleWalletSignerWithGatewayClient:
+    """Verify CircleWalletSigner can be used with GatewayClient."""
+
+    def test_works_as_gateway_client_signer(self, circle_mocks):
+        signer = _make_signer(circle_mocks)
+
+        from circlekit import GatewayClient
+
+        client = GatewayClient(chain="arcTestnet", signer=signer)
+        assert client.address == FAKE_ADDRESS
+
+
+# ===========================================================================
+# CircleTxExecutor tests
+# ===========================================================================
+
+FAKE_TX_ID = "tx-id-abc123"
+FAKE_TX_HASH = "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+
+
+def _make_executor(circle_mocks, wallet_address=FAKE_ADDRESS, **kwargs):
+    """Create a CircleTxExecutor inside an active circle_mocks context."""
+    from circlekit.wallets import CircleTxExecutor
+
+    executor = CircleTxExecutor(
+        wallet_id=FAKE_WALLET_ID,
+        wallet_address=wallet_address,
+        api_key=FAKE_API_KEY,
+        entity_secret=FAKE_ENTITY_SECRET,
+        **kwargs,
+    )
+    return executor
+
+
+def _mock_submit_response(mock_transactions_api, tx_id=FAKE_TX_ID):
+    """Configure mock TransactionsApi to return a submit response with given tx ID."""
+    response = MagicMock()
+    response.data.transaction.id = tx_id
+    mock_transactions_api.create_developer_transaction_contract_execution.return_value = response
+
+
+def _mock_submit_response_flat_data(mock_transactions_api, tx_id=FAKE_TX_ID):
+    """Configure mock submit response using newer SDK shape: response.data.id."""
+    response = MagicMock()
+    response.data.id = tx_id
+    response.data.transaction = None
+    mock_transactions_api.create_developer_transaction_contract_execution.return_value = response
+
+
+def _mock_poll_response(mock_transactions_api, state, tx_hash=FAKE_TX_HASH, error_reason=None):
+    """Configure mock TransactionsApi.get_transaction to return given state."""
+    response = MagicMock()
+    response.data.transaction.state = state
+    response.data.transaction.tx_hash = tx_hash
+    response.data.transaction.error_reason = error_reason
+    mock_transactions_api.get_transaction.return_value = response
+
+
+# ---------------------------------------------------------------------------
+# Protocol conformance
+# ---------------------------------------------------------------------------
+
+
+class TestCircleTxExecutorProtocol:
+    """Verify CircleTxExecutor satisfies the TxExecutor protocol."""
+
+    def test_satisfies_tx_executor_protocol(self, circle_mocks):
+        executor = _make_executor(circle_mocks)
+        assert isinstance(executor, TxExecutor)
+
+    def test_address_property(self, circle_mocks):
+        executor = _make_executor(circle_mocks)
+        assert executor.address == FAKE_ADDRESS
+
+    def test_repr(self, circle_mocks):
+        executor = _make_executor(circle_mocks)
+        r = repr(executor)
+        assert "CircleTxExecutor" in r
+        assert FAKE_WALLET_ID in r
+        assert FAKE_ADDRESS in r
+
+
+# ---------------------------------------------------------------------------
+# Initialization
+# ---------------------------------------------------------------------------
+
+
+class TestCircleTxExecutorInit:
+    """Test constructor behavior."""
+
+    def test_requires_circle_sdk_installed(self):
+        with patch("circlekit.wallets.HAS_CIRCLE_WALLETS", False):
+            from circlekit.wallets import CircleTxExecutor
+
+            with pytest.raises(ImportError, match="circle-developer-controlled-wallets"):
+                CircleTxExecutor(
+                    wallet_id=FAKE_WALLET_ID,
+                    wallet_address=FAKE_ADDRESS,
+                    api_key=FAKE_API_KEY,
+                    entity_secret=FAKE_ENTITY_SECRET,
+                )
+
+    def test_fetches_address_from_api(self, circle_mocks):
+        """When wallet_address is not provided, fetch via WalletsApi.get_wallet."""
+        mock_wallets_api = circle_mocks["wallets_api"]
+
+        wallet_obj = SimpleNamespace(address=FAKE_ADDRESS)
+        wallet_data = SimpleNamespace(wallet=wallet_obj)
+        response = SimpleNamespace(data=wallet_data)
+        mock_wallets_api.get_wallet.return_value = response
+
+        from circlekit.wallets import CircleTxExecutor
+
+        executor = CircleTxExecutor(
+            wallet_id=FAKE_WALLET_ID,
+            api_key=FAKE_API_KEY,
+            entity_secret=FAKE_ENTITY_SECRET,
+        )
+
+        mock_wallets_api.get_wallet.assert_called_once_with(id=FAKE_WALLET_ID)
+        assert executor.address == FAKE_ADDRESS
+
+    def test_fetches_address_from_api_actual_instance_wrapper(self, circle_mocks):
+        """Supports oneOf wrapper shape where wallet address is in actual_instance."""
+        mock_wallets_api = circle_mocks["wallets_api"]
+
+        wallet_obj = SimpleNamespace(actual_instance=SimpleNamespace(address=FAKE_ADDRESS))
+        response = SimpleNamespace(data=SimpleNamespace(wallet=wallet_obj))
+        mock_wallets_api.get_wallet.return_value = response
+
+        from circlekit.wallets import CircleTxExecutor
+
+        executor = CircleTxExecutor(
+            wallet_id=FAKE_WALLET_ID,
+            api_key=FAKE_API_KEY,
+            entity_secret=FAKE_ENTITY_SECRET,
+        )
+
+        assert executor.address == FAKE_ADDRESS
+
+    def test_uses_provided_address(self, circle_mocks):
+        executor = _make_executor(circle_mocks, wallet_address=FAKE_ADDRESS)
+        circle_mocks["wallets_api"].get_wallet.assert_not_called()
+        assert executor.address == FAKE_ADDRESS
+
+    def test_env_var_fallback(self):
+        env = {
+            "CIRCLE_API_KEY": "env-api-key",
+            "CIRCLE_ENTITY_SECRET": "b" * 64,
+        }
+        with (
+            patch("circlekit.wallets.HAS_CIRCLE_WALLETS", True),
+            patch.dict("os.environ", env),
+            patch("circlekit.wallets.init_developer_controlled_wallets_client") as mock_init,
+            patch("circlekit.wallets.SigningApi"),
+            patch("circlekit.wallets.WalletsApi"),
+            patch("circlekit.wallets.TransactionsApi"),
+        ):
+            mock_init.return_value = MagicMock()
+
+            from circlekit.wallets import CircleTxExecutor
+
+            executor = CircleTxExecutor(
+                wallet_id=FAKE_WALLET_ID,
+                wallet_address=FAKE_ADDRESS,
+            )
+
+            mock_init.assert_called_once_with(
+                api_key="env-api-key",
+                entity_secret="b" * 64,
+            )
+            assert executor.address == FAKE_ADDRESS
+
+    def test_raises_without_api_key(self):
+        with (
+            patch("circlekit.wallets.HAS_CIRCLE_WALLETS", True),
+            patch.dict("os.environ", {}, clear=True),
+            patch("circlekit.wallets.init_developer_controlled_wallets_client"),
+            patch("circlekit.wallets.SigningApi"),
+            patch("circlekit.wallets.WalletsApi"),
+            patch("circlekit.wallets.TransactionsApi"),
+        ):
+            from circlekit.wallets import CircleTxExecutor
+
+            with pytest.raises(ValueError, match="api_key"):
+                CircleTxExecutor(
+                    wallet_id=FAKE_WALLET_ID,
+                    wallet_address=FAKE_ADDRESS,
+                    entity_secret=FAKE_ENTITY_SECRET,
+                )
+
+    def test_raises_without_entity_secret(self):
+        with (
+            patch("circlekit.wallets.HAS_CIRCLE_WALLETS", True),
+            patch.dict("os.environ", {}, clear=True),
+            patch("circlekit.wallets.init_developer_controlled_wallets_client"),
+            patch("circlekit.wallets.SigningApi"),
+            patch("circlekit.wallets.WalletsApi"),
+            patch("circlekit.wallets.TransactionsApi"),
+        ):
+            from circlekit.wallets import CircleTxExecutor
+
+            with pytest.raises(ValueError, match="entity_secret"):
+                CircleTxExecutor(
+                    wallet_id=FAKE_WALLET_ID,
+                    wallet_address=FAKE_ADDRESS,
+                    api_key=FAKE_API_KEY,
+                )
+
+    def test_custom_poll_interval_and_timeout(self, circle_mocks):
+        executor = _make_executor(circle_mocks, poll_interval=2.5, timeout=60.0)
+        assert executor._poll_interval == 2.5
+        assert executor._timeout == 60.0
+
+
+# ---------------------------------------------------------------------------
+# _submit_and_wait
+# ---------------------------------------------------------------------------
+
+
+class TestCircleTxExecutorSubmitAndWait:
+    """Test the core _submit_and_wait helper."""
+
+    def test_success_flow(self, circle_mocks):
+        """Transaction immediately reaches CONFIRMED state."""
+        executor = _make_executor(circle_mocks)
+        mock_tx = circle_mocks["transactions_api"]
+
+        _mock_submit_response(mock_tx)
+        _mock_poll_response(mock_tx, "CONFIRMED", tx_hash=FAKE_TX_HASH)
+
+        result = executor._submit_and_wait("0xContract", "foo(uint256)", ["42"])
+        assert result == FAKE_TX_HASH
+
+    def test_success_complete_state(self, circle_mocks):
+        """COMPLETE is also a success state."""
+        executor = _make_executor(circle_mocks)
+        mock_tx = circle_mocks["transactions_api"]
+
+        _mock_submit_response(mock_tx)
+        _mock_poll_response(mock_tx, "COMPLETE", tx_hash=FAKE_TX_HASH)
+
+        result = executor._submit_and_wait("0xContract", "bar()", [])
+        assert result == FAKE_TX_HASH
+
+    def test_success_cleared_state(self, circle_mocks):
+        """CLEARED is also a success state."""
+        executor = _make_executor(circle_mocks)
+        mock_tx = circle_mocks["transactions_api"]
+
+        _mock_submit_response(mock_tx)
+        _mock_poll_response(mock_tx, "CLEARED", tx_hash=FAKE_TX_HASH)
+
+        result = executor._submit_and_wait("0xContract", "baz()", [])
+        assert result == FAKE_TX_HASH
+
+    def test_submit_response_with_flat_data_shape(self, circle_mocks):
+        """Supports newer Circle SDK response shape where tx id is response.data.id."""
+        executor = _make_executor(circle_mocks)
+        mock_tx = circle_mocks["transactions_api"]
+
+        _mock_submit_response_flat_data(mock_tx)
+        _mock_poll_response(mock_tx, "CONFIRMED", tx_hash=FAKE_TX_HASH)
+
+        result = executor._submit_and_wait("0xContract", "foo(uint256)", ["42"])
+        assert result == FAKE_TX_HASH
+
+    def test_poll_response_with_flat_data_shape(self, circle_mocks):
+        """Supports poll shape where transaction fields are directly under response.data."""
+        executor = _make_executor(circle_mocks)
+        mock_tx = circle_mocks["transactions_api"]
+
+        _mock_submit_response(mock_tx)
+        poll = MagicMock()
+        poll.data.transaction = None
+        poll.data.state = "CONFIRMED"
+        poll.data.tx_hash = FAKE_TX_HASH
+        poll.data.error_reason = None
+        mock_tx.get_transaction.return_value = poll
+
+        result = executor._submit_and_wait("0xContract", "foo(uint256)", ["42"])
+        assert result == FAKE_TX_HASH
+
+    def test_failure_failed_state(self, circle_mocks):
+        from circlekit.wallets import CircleTransactionError
+
+        executor = _make_executor(circle_mocks)
+        mock_tx = circle_mocks["transactions_api"]
+
+        _mock_submit_response(mock_tx)
+        _mock_poll_response(mock_tx, "FAILED", error_reason="out of gas")
+
+        with pytest.raises(CircleTransactionError) as exc_info:
+            executor._submit_and_wait("0xContract", "fail()", [])
+
+        assert exc_info.value.state == "FAILED"
+        assert exc_info.value.error_reason == "out of gas"
+        assert exc_info.value.transaction_id == FAKE_TX_ID
+
+    def test_failure_cancelled_state(self, circle_mocks):
+        from circlekit.wallets import CircleTransactionError
+
+        executor = _make_executor(circle_mocks)
+        mock_tx = circle_mocks["transactions_api"]
+
+        _mock_submit_response(mock_tx)
+        _mock_poll_response(mock_tx, "CANCELLED")
+
+        with pytest.raises(CircleTransactionError) as exc_info:
+            executor._submit_and_wait("0xContract", "cancel()", [])
+        assert exc_info.value.state == "CANCELLED"
+
+    def test_failure_denied_state(self, circle_mocks):
+        from circlekit.wallets import CircleTransactionError
+
+        executor = _make_executor(circle_mocks)
+        mock_tx = circle_mocks["transactions_api"]
+
+        _mock_submit_response(mock_tx)
+        _mock_poll_response(mock_tx, "DENIED")
+
+        with pytest.raises(CircleTransactionError) as exc_info:
+            executor._submit_and_wait("0xContract", "deny()", [])
+        assert exc_info.value.state == "DENIED"
+
+    def test_timeout(self, circle_mocks):
+        from circlekit.wallets import CircleTransactionTimeoutError
+
+        executor = _make_executor(circle_mocks, poll_interval=0.01, timeout=0.05)
+        mock_tx = circle_mocks["transactions_api"]
+
+        _mock_submit_response(mock_tx)
+        # Always return PENDING — never reaches terminal
+        _mock_poll_response(mock_tx, "PENDING")
+
+        with pytest.raises(CircleTransactionTimeoutError) as exc_info:
+            executor._submit_and_wait("0xContract", "slow()", [])
+        assert exc_info.value.transaction_id == FAKE_TX_ID
+
+    def test_multi_poll_progression(self, circle_mocks):
+        """Transaction progresses through non-terminal states before confirming."""
+        executor = _make_executor(circle_mocks, poll_interval=0.01)
+        mock_tx = circle_mocks["transactions_api"]
+
+        _mock_submit_response(mock_tx)
+
+        # Sequence: INITIATED -> QUEUED -> SENT -> CONFIRMED
+        states = ["INITIATED", "QUEUED", "SENT", "CONFIRMED"]
+        responses = []
+        for state in states:
+            r = MagicMock()
+            r.data.transaction.state = state
+            r.data.transaction.tx_hash = FAKE_TX_HASH
+            r.data.transaction.error_reason = None
+            responses.append(r)
+        mock_tx.get_transaction.side_effect = responses
+
+        result = executor._submit_and_wait("0xContract", "multi()", [])
+        assert result == FAKE_TX_HASH
+        assert mock_tx.get_transaction.call_count == 4
+
+    def test_error_reason_propagation(self, circle_mocks):
+        from circlekit.wallets import CircleTransactionError
+
+        executor = _make_executor(circle_mocks)
+        mock_tx = circle_mocks["transactions_api"]
+
+        _mock_submit_response(mock_tx)
+        _mock_poll_response(mock_tx, "FAILED", error_reason="nonce too low")
+
+        with pytest.raises(CircleTransactionError, match="nonce too low"):
+            executor._submit_and_wait("0xContract", "err()", [])
+
+
+# ---------------------------------------------------------------------------
+# Execute methods
+# ---------------------------------------------------------------------------
+
+
+class TestCircleTxExecutorMethods:
+    """Verify each execute method passes correct contract, ABI, and params."""
+
+    def test_execute_approve(self, circle_mocks):
+        executor = _make_executor(circle_mocks)
+        mock_tx = circle_mocks["transactions_api"]
+        _mock_submit_response(mock_tx)
+        _mock_poll_response(mock_tx, "CONFIRMED")
+
+        spender = "0xSpenderAddress"
+        executor.execute_approve("arcTestnet", FAKE_ADDRESS, spender, 1_000_000)
+
+        req = mock_tx.create_developer_transaction_contract_execution.call_args.args[0]
+        assert req.abi_function_signature == "approve(address,uint256)"
+        assert req.abi_parameters[0].actual_instance == spender
+        assert req.abi_parameters[1].actual_instance == "1000000"
+
+    def test_execute_deposit(self, circle_mocks):
+        from circlekit.constants import get_chain_config
+
+        executor = _make_executor(circle_mocks)
+        mock_tx = circle_mocks["transactions_api"]
+        _mock_submit_response(mock_tx)
+        _mock_poll_response(mock_tx, "CONFIRMED")
+
+        config = get_chain_config("arcTestnet")
+        executor.execute_deposit("arcTestnet", FAKE_ADDRESS, 5_000_000)
+
+        req = mock_tx.create_developer_transaction_contract_execution.call_args.args[0]
+        assert req.contract_address == config.gateway_address
+        assert req.abi_function_signature == "deposit(address,uint256)"
+        assert req.abi_parameters[0].actual_instance == config.usdc_address
+        assert req.abi_parameters[1].actual_instance == "5000000"
+
+    def test_execute_deposit_for(self, circle_mocks):
+        from circlekit.constants import get_chain_config
+
+        executor = _make_executor(circle_mocks)
+        mock_tx = circle_mocks["transactions_api"]
+        _mock_submit_response(mock_tx)
+        _mock_poll_response(mock_tx, "CONFIRMED")
+
+        config = get_chain_config("arcTestnet")
+        depositor = "0xDepositorAddr"
+        executor.execute_deposit_for("arcTestnet", FAKE_ADDRESS, depositor, 2_000_000)
+
+        req = mock_tx.create_developer_transaction_contract_execution.call_args.args[0]
+        assert req.contract_address == config.gateway_address
+        assert req.abi_function_signature == "depositFor(address,address,uint256)"
+        assert req.abi_parameters[0].actual_instance == config.usdc_address
+        assert req.abi_parameters[1].actual_instance == depositor
+        assert req.abi_parameters[2].actual_instance == "2000000"
+
+    def test_execute_gateway_mint_hex_strings(self, circle_mocks):
+        from circlekit.constants import get_chain_config
+
+        executor = _make_executor(circle_mocks)
+        mock_tx = circle_mocks["transactions_api"]
+        _mock_submit_response(mock_tx)
+        _mock_poll_response(mock_tx, "CONFIRMED")
+
+        config = get_chain_config("arcTestnet")
+        attestation = "0xabcd"
+        signature = "0x1234"
+        executor.execute_gateway_mint("arcTestnet", attestation, signature)
+
+        req = mock_tx.create_developer_transaction_contract_execution.call_args.args[0]
+        assert req.contract_address == config.gateway_minter
+        assert req.abi_function_signature == "gatewayMint(bytes,bytes)"
+        assert req.abi_parameters[0].actual_instance == "0xabcd"
+        assert req.abi_parameters[1].actual_instance == "0x1234"
+
+    def test_execute_gateway_mint_bytes(self, circle_mocks):
+        """bytes inputs are normalized to 0x-prefixed hex strings."""
+        executor = _make_executor(circle_mocks)
+        mock_tx = circle_mocks["transactions_api"]
+        _mock_submit_response(mock_tx)
+        _mock_poll_response(mock_tx, "CONFIRMED")
+
+        att_bytes = b"\xab\xcd"
+        sig_bytes = b"\x12\x34"
+        executor.execute_gateway_mint("arcTestnet", att_bytes, sig_bytes)
+
+        req = mock_tx.create_developer_transaction_contract_execution.call_args.args[0]
+        assert req.abi_parameters[0].actual_instance == "0xabcd"
+        assert req.abi_parameters[1].actual_instance == "0x1234"
+
+    def test_execute_initiate_withdrawal(self, circle_mocks):
+        from circlekit.constants import get_chain_config
+
+        executor = _make_executor(circle_mocks)
+        mock_tx = circle_mocks["transactions_api"]
+        _mock_submit_response(mock_tx)
+        _mock_poll_response(mock_tx, "CONFIRMED")
+
+        config = get_chain_config("arcTestnet")
+        amount = 1_000_000
+        executor.execute_initiate_withdrawal("arcTestnet", FAKE_ADDRESS, amount)
+
+        req = mock_tx.create_developer_transaction_contract_execution.call_args.args[0]
+        assert req.contract_address == config.gateway_address
+        assert req.abi_function_signature == "initiateWithdrawal(address,uint256)"
+        assert req.abi_parameters[0].actual_instance == config.usdc_address
+        assert req.abi_parameters[1].actual_instance == str(amount)
+
+    def test_execute_complete_withdrawal(self, circle_mocks):
+        from circlekit.constants import get_chain_config
+
+        executor = _make_executor(circle_mocks)
+        mock_tx = circle_mocks["transactions_api"]
+        _mock_submit_response(mock_tx)
+        _mock_poll_response(mock_tx, "CONFIRMED")
+
+        config = get_chain_config("arcTestnet")
+        executor.execute_complete_withdrawal("arcTestnet", FAKE_ADDRESS)
+
+        req = mock_tx.create_developer_transaction_contract_execution.call_args.args[0]
+        assert req.contract_address == config.gateway_address
+        assert req.abi_function_signature == "withdraw(address)"
+        assert req.abi_parameters[0].actual_instance == config.usdc_address
+
+    def test_execute_approve_uses_usdc_address(self, circle_mocks):
+        """execute_approve targets the USDC contract, not the gateway."""
+        from circlekit.constants import get_chain_config
+
+        executor = _make_executor(circle_mocks)
+        mock_tx = circle_mocks["transactions_api"]
+        _mock_submit_response(mock_tx)
+        _mock_poll_response(mock_tx, "CONFIRMED")
+
+        config = get_chain_config("arcTestnet")
+        executor.execute_approve("arcTestnet", FAKE_ADDRESS, config.gateway_address, 100)
+
+        req = mock_tx.create_developer_transaction_contract_execution.call_args.args[0]
+        assert req.contract_address == config.usdc_address
+
+
+# ---------------------------------------------------------------------------
+# check_allowance
+# ---------------------------------------------------------------------------
+
+
+class TestCircleTxExecutorCheckAllowance:
+    """Test check_allowance via direct RPC eth_call."""
+
+    def test_check_allowance_basic(self, circle_mocks):
+        executor = _make_executor(circle_mocks)
+
+        # Mock the httpx client
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": "0x00000000000000000000000000000000000000000000000000000000000f4240",
+        }
+        executor._http = MagicMock()
+        executor._http.post.return_value = mock_response
+
+        result = executor.check_allowance(
+            "arcTestnet",
+            "0x1111111111111111111111111111111111111111",
+            "0x2222222222222222222222222222222222222222",
+        )
+
+        assert result == 1_000_000  # 0xf4240
+
+    def test_check_allowance_calldata_encoding(self, circle_mocks):
+        """Verify the calldata contains the allowance selector + padded addresses."""
+        executor = _make_executor(circle_mocks)
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"jsonrpc": "2.0", "id": 1, "result": "0x0"}
+        executor._http = MagicMock()
+        executor._http.post.return_value = mock_response
+
+        owner = "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        spender = "0xBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+        executor.check_allowance("arcTestnet", owner, spender)
+
+        call_args = executor._http.post.call_args
+        payload = call_args.kwargs["json"]
+        data = payload["params"][0]["data"]
+
+        # Must start with allowance selector
+        assert data.startswith("0xdd62ed3e")
+        # Must contain padded owner and spender (lowercased)
+        assert owner[2:].lower().zfill(64) in data
+        assert spender[2:].lower().zfill(64) in data
+
+    def test_check_allowance_rpc_url_override(self, circle_mocks):
+        """When rpc_url is provided, it should be used instead of config default."""
+        executor = _make_executor(circle_mocks)
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"jsonrpc": "2.0", "id": 1, "result": "0x0"}
+        executor._http = MagicMock()
+        executor._http.post.return_value = mock_response
+
+        custom_rpc = "https://custom-rpc.example.com"
+        executor.check_allowance("arcTestnet", FAKE_ADDRESS, FAKE_ADDRESS, rpc_url=custom_rpc)
+
+        call_args = executor._http.post.call_args
+        assert call_args.args[0] == custom_rpc
+
+    def test_check_allowance_zero_result(self, circle_mocks):
+        executor = _make_executor(circle_mocks)
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"jsonrpc": "2.0", "id": 1, "result": "0x0"}
+        executor._http = MagicMock()
+        executor._http.post.return_value = mock_response
+
+        result = executor.check_allowance("arcTestnet", FAKE_ADDRESS, FAKE_ADDRESS)
+        assert result == 0
+
+    def test_check_allowance_empty_result_raises(self, circle_mocks):
+        """Empty result string should raise RuntimeError, not silently return 0."""
+        executor = _make_executor(circle_mocks)
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"jsonrpc": "2.0", "id": 1, "result": ""}
+        executor._http = MagicMock()
+        executor._http.post.return_value = mock_response
+
+        with pytest.raises(RuntimeError, match="missing 'result'"):
+            executor.check_allowance("arcTestnet", FAKE_ADDRESS, FAKE_ADDRESS)
+
+    def test_check_allowance_http_error_raises(self, circle_mocks):
+        """HTTP errors should propagate, not be silently swallowed."""
+        executor = _make_executor(circle_mocks)
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "Server Error", request=MagicMock(), response=MagicMock()
+        )
+        executor._http = MagicMock()
+        executor._http.post.return_value = mock_response
+
+        with pytest.raises(httpx.HTTPStatusError):
+            executor.check_allowance("arcTestnet", FAKE_ADDRESS, FAKE_ADDRESS)
+
+    def test_check_allowance_rpc_error_raises(self, circle_mocks):
+        """JSON-RPC error responses should raise RuntimeError."""
+        executor = _make_executor(circle_mocks)
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": {"code": -32000, "message": "execution reverted"},
+        }
+        executor._http = MagicMock()
+        executor._http.post.return_value = mock_response
+
+        with pytest.raises(RuntimeError, match="execution reverted"):
+            executor.check_allowance("arcTestnet", FAKE_ADDRESS, FAKE_ADDRESS)
+
+
+# ---------------------------------------------------------------------------
+# GatewayClient integration
+# ---------------------------------------------------------------------------
+
+
+class TestCircleTxExecutorWithGatewayClient:
+    """Verify CircleTxExecutor can be used with GatewayClient."""
+
+    def test_works_as_gateway_client_tx_executor(self, circle_mocks):
+        signer = _make_signer(circle_mocks)
+        executor = _make_executor(circle_mocks)
+
+        from circlekit import GatewayClient
+
+        client = GatewayClient(chain="arcTestnet", signer=signer, tx_executor=executor)
+        assert client.address == FAKE_ADDRESS
+
+    def test_address_mismatch_rejected(self, circle_mocks):
+        signer = _make_signer(circle_mocks)
+
+        other_address = "0xAAAABBBBCCCCDDDDEEEEFFFF0000111122223333"
+        executor = _make_executor(circle_mocks, wallet_address=other_address)
+
+        from circlekit import GatewayClient
+
+        with pytest.raises(ValueError, match="does not match"):
+            GatewayClient(chain="arcTestnet", signer=signer, tx_executor=executor)
+
+
+# ---------------------------------------------------------------------------
+# _normalize_to_hex
+# ---------------------------------------------------------------------------
+
+
+class TestNormalizeToHex:
+    """Test the _normalize_to_hex helper."""
+
+    def test_bytes_input(self):
+        from circlekit.wallets import _normalize_to_hex
+
+        assert _normalize_to_hex(b"\xab\xcd") == "0xabcd"
+
+    def test_hex_string_with_prefix(self):
+        from circlekit.wallets import _normalize_to_hex
+
+        assert _normalize_to_hex("0xabcd") == "0xabcd"
+
+    def test_hex_string_without_prefix(self):
+        from circlekit.wallets import _normalize_to_hex
+
+        assert _normalize_to_hex("abcd") == "0xabcd"
+
+    def test_empty_bytes_raises(self):
+        from circlekit.wallets import _normalize_to_hex
+
+        with pytest.raises(ValueError, match="non-empty"):
+            _normalize_to_hex(b"")
+
+    def test_empty_string_raises(self):
+        from circlekit.wallets import _normalize_to_hex
+
+        with pytest.raises(ValueError, match="non-empty"):
+            _normalize_to_hex("")
+
+    def test_bare_0x_prefix_raises(self):
+        from circlekit.wallets import _normalize_to_hex
+
+        with pytest.raises(ValueError, match="non-empty"):
+            _normalize_to_hex("0x")

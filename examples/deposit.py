@@ -14,7 +14,6 @@ Options:
     --amount, -a   Amount of USDC to deposit (default: 0.5)
     --help, -h     Show this help message
 
-Port of: basic-paywall/deposit.ts
 """
 
 import argparse

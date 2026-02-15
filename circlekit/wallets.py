@@ -1,495 +1,474 @@
 """
-Circle Programmable Wallets integration for AI agent identity management.
+Circle Developer-Controlled Wallets adapters for Signer and TxExecutor protocols.
 
-This module provides a wrapper around Circle's official Developer-Controlled
-Wallets SDK, enabling agents to have persistent, secure wallets without managing
-raw private keys. Circle handles key security.
+Circle's Developer-Controlled Wallets are MPC-backed: signing happens via
+Circle's API, so no private key ever leaves Circle's infrastructure.
 
-Official docs: https://developers.circle.com/sdks/developer-controlled-wallets-python-sdk
+Requires: pip install circle-titanoboa-sdk[wallets]
 
 Usage:
-    from circlekit.wallets import AgentWalletManager
-    
-    manager = AgentWalletManager(
-        api_key="your-api-key",
-        entity_secret="your-entity-secret"
-    )
-    
-    # Create a wallet set first (one-time)
-    wallet_set = manager.create_wallet_set("my-agents")
-    
-    # Create a wallet for an agent
-    wallet = manager.create_wallet(
-        name="agent-001",
-        wallet_set_id=wallet_set.wallet_set_id,
-        blockchain="arcTestnet"
-    )
-    print(f"Agent wallet address: {wallet.address}")
+    from circlekit.wallets import CircleWalletSigner, CircleTxExecutor
 
-Note:
-    This module complements titanoboa (used for on-chain Vyper interactions).
-    Circle SDK handles wallet identity/signing; titanoboa handles contract calls.
+    signer = CircleWalletSigner(wallet_id="...", wallet_address="0x...")
+    tx_executor = CircleTxExecutor(wallet_id="...", wallet_address="0x...")
+    client = GatewayClient(chain="arcTestnet", signer=signer, tx_executor=tx_executor)
+    result = await client.pay("https://api.example.com/paid-endpoint")
 """
 
-from dataclasses import dataclass
-from typing import Optional, List, Dict, Any
+from __future__ import annotations
+
+import json
 import os
-import uuid
+import time
+from typing import Any
 
-# Import from Circle's official SDK
-# Using the high-level helper functions for proper setup
-from circle.web3.utils import (
-    init_developer_controlled_wallets_client,
-    generate_entity_secret_ciphertext,
-)
-from circle.web3.developer_controlled_wallets import (
-    WalletsApi,
-    WalletSetsApi,
-    SigningApi,
-    TransactionsApi,
-    CreateWalletRequest,
-    CreateWalletSetRequest,
-    SignMessageRequest,
-    SignTypedDataRequest,
-    WalletMetadata,
-)
+import httpx
 
+from circlekit.constants import get_chain_config
 
-# Map friendly names to Circle's blockchain format
-BLOCKCHAIN_MAPPING = {
-    # Testnets
-    "arcTestnet": "ARC-TESTNET",
-    "ARC_TESTNET": "ARC-TESTNET",
-    "baseSepolia": "BASE-SEPOLIA",
-    "BASE_SEPOLIA": "BASE-SEPOLIA",
-    "ethereumSepolia": "ETH-SEPOLIA",
-    "ETH_SEPOLIA": "ETH-SEPOLIA",
-    "avalancheFuji": "AVAX-FUJI",
-    "AVAX_FUJI": "AVAX-FUJI",
-    "maticAmoy": "MATIC-AMOY",
-    "MATIC_AMOY": "MATIC-AMOY",
-    # Mainnets
-    "ethereum": "ETH",
-    "ETH": "ETH",
-    "base": "BASE",
-    "BASE": "BASE",
-    "polygon": "MATIC",
-    "MATIC": "MATIC",
-    "arbitrum": "ARB",
-    "ARB": "ARB",
-    "avalanche": "AVAX",
-    "AVAX": "AVAX",
-    "optimism": "OP",
-    "OP": "OP",
-}
+try:
+    from circle.web3.developer_controlled_wallets import (
+        SigningApi,
+        SignTypedDataRequest,
+        TransactionsApi,
+        WalletsApi,
+    )
+    from circle.web3.developer_controlled_wallets.models.abi_parameters_inner import (
+        AbiParametersInner,
+    )
+    from circle.web3.developer_controlled_wallets.models.create_contract_execution_transaction_for_developer_request import (
+        CreateContractExecutionTransactionForDeveloperRequest,
+    )
+    from circle.web3.developer_controlled_wallets.models.fee_level import FeeLevel
+    from circle.web3.utils import (
+        init_developer_controlled_wallets_client,
+    )
+
+    HAS_CIRCLE_WALLETS = True
+except ImportError:
+    HAS_CIRCLE_WALLETS = False
+    # Stubs so the names exist at module level (enables patching in tests)
+    SigningApi = None  # type: ignore[assignment,misc]
+    SignTypedDataRequest = None  # type: ignore[assignment,misc]
+    TransactionsApi = None  # type: ignore[assignment,misc]
+    WalletsApi = None  # type: ignore[assignment,misc]
+    AbiParametersInner = None  # type: ignore[assignment,misc]
+    CreateContractExecutionTransactionForDeveloperRequest = None  # type: ignore[assignment,misc]
+    FeeLevel = None  # type: ignore[assignment,misc]
+    init_developer_controlled_wallets_client = None  # type: ignore[assignment]
 
 
-@dataclass
-class AgentWallet:
+class CircleWalletSigner:
     """
-    Represents a Circle-managed wallet for an agent.
-    
-    Attributes:
-        wallet_id: Circle's internal wallet ID (use for API calls)
-        address: On-chain wallet address (use for transactions)
-        blockchain: Blockchain this wallet is on
-        name: Human-readable name
-        state: Wallet state (e.g., "LIVE")
-        wallet_set_id: The wallet set this wallet belongs to
+    Signer backed by Circle Developer-Controlled Wallets.
+
+    Implements the Signer protocol (circlekit.signer.Signer) by calling
+    Circle's signing API. No private key material is ever exposed.
     """
-    wallet_id: str
-    address: str
-    blockchain: str
-    name: Optional[str] = None
-    state: Optional[str] = None
-    wallet_set_id: Optional[str] = None
 
-
-@dataclass
-class WalletSet:
-    """
-    Represents a Circle wallet set (container for wallets).
-    
-    You need to create a wallet set before creating wallets.
-    """
-    wallet_set_id: str
-    name: Optional[str] = None
-    custody_type: Optional[str] = None
-
-
-@dataclass
-class SignatureResult:
-    """Result of a signing operation."""
-    signature: str
-    wallet_id: str
-
-
-class AgentWalletManager:
-    """
-    Manages Circle Programmable Wallets for AI agents.
-    
-    This enables agents to have persistent, secure wallets without managing
-    raw private keys - Circle handles key security server-side.
-    
-    Prerequisites:
-        - API key from Circle Developer Console (https://console.circle.com)
-        - Entity secret (generated in Circle dashboard under Developer > Entity Secret)
-    
-    Args:
-        api_key: Circle API key (or set CIRCLE_API_KEY env var)
-        entity_secret: Circle entity secret (or set CIRCLE_ENTITY_SECRET env var)
-    
-    Example:
-        manager = AgentWalletManager()
-        
-        # First, create a wallet set (one-time setup)
-        wallet_set = manager.create_wallet_set("my-agent-wallets")
-        
-        # Then create wallets in that set
-        wallet = manager.create_wallet(
-            name="trading-agent-001",
-            wallet_set_id=wallet_set.wallet_set_id,
-            blockchain="arcTestnet"
-        )
-        
-        print(f"Agent address: {wallet.address}")
-    """
-    
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        entity_secret: Optional[str] = None,
-    ):
-        self._api_key = api_key or os.environ.get("CIRCLE_API_KEY")
-        self._entity_secret = entity_secret or os.environ.get("CIRCLE_ENTITY_SECRET")
-        
-        if not self._api_key:
-            raise ValueError(
-                "Circle API key required. Set CIRCLE_API_KEY env var or pass api_key parameter. "
-                "Get one from: https://console.circle.com"
-            )
-        
-        if not self._entity_secret:
-            raise ValueError(
-                "Circle entity secret required. Set CIRCLE_ENTITY_SECRET env var or pass entity_secret parameter. "
-                "Generate one in Circle Console under Developer > Entity Secret."
-            )
-        
-        # Use Circle's official helper to initialize the ApiClient properly
-        # This handles API key configuration, entity secret, and public key for encryption
-        self._api_client = init_developer_controlled_wallets_client(
-            api_key=self._api_key,
-            entity_secret=self._entity_secret,
-        )
-        
-        # Generate entity secret ciphertext for wallet operations
-        self._entity_secret_ciphertext = generate_entity_secret_ciphertext(
-            api_key=self._api_key,
-            entity_secret_hex=self._entity_secret,
-        )
-        
-        # Create API instances from the ApiClient
-        self._wallets_api = WalletsApi(api_client=self._api_client)
-        self._wallet_sets_api = WalletSetsApi(api_client=self._api_client)
-        self._signing_api = SigningApi(api_client=self._api_client)
-    
-    def _normalize_blockchain(self, blockchain: str) -> str:
-        """Convert friendly blockchain names to Circle's format."""
-        return BLOCKCHAIN_MAPPING.get(blockchain, blockchain)
-    
-    def _generate_idempotency_key(self) -> str:
-        """Generate a unique idempotency key for requests."""
-        return str(uuid.uuid4())
-    
-    def create_wallet_set(self, name: str) -> WalletSet:
-        """
-        Create a wallet set (container for wallets).
-        
-        You must create a wallet set before creating wallets.
-        Typically you only need one wallet set per application.
-        
-        Args:
-            name: Human-readable name for the wallet set
-            
-        Returns:
-            WalletSet with wallet_set_id
-            
-        Example:
-            wallet_set = manager.create_wallet_set("my-agent-wallets")
-            print(f"Wallet set ID: {wallet_set.wallet_set_id}")
-        """
-        response = self._wallet_sets_api.create_wallet_set(
-            create_wallet_set_request=CreateWalletSetRequest(
-                idempotencyKey=self._generate_idempotency_key(),
-                entitySecretCiphertext=self._entity_secret_ciphertext,
-                name=name,
-            )
-        )
-        
-        wallet_set_wrapper = response.data.wallet_set
-        # SDK uses a wrapper class with actual_instance containing the real data
-        wallet_set_data = wallet_set_wrapper.actual_instance if hasattr(wallet_set_wrapper, 'actual_instance') else wallet_set_wrapper
-        
-        return WalletSet(
-            wallet_set_id=wallet_set_data.id,
-            name=getattr(wallet_set_data, 'name', name),
-            custody_type=getattr(wallet_set_data, 'custody_type', None),
-        )
-    
-    def list_wallet_sets(self) -> List[WalletSet]:
-        """
-        List all wallet sets.
-        
-        Returns:
-            List of WalletSet instances
-        """
-        response = self._wallet_sets_api.get_wallet_sets()
-        
-        result = []
-        for ws in response.data.wallet_sets:
-            # SDK uses a wrapper class with actual_instance
-            actual = ws.actual_instance if hasattr(ws, 'actual_instance') else ws
-            result.append(WalletSet(
-                wallet_set_id=actual.id,
-                name=getattr(actual, 'name', None),
-                custody_type=getattr(actual, 'custody_type', None),
-            ))
-        return result
-    
-    def create_wallet(
-        self,
-        wallet_set_id: str,
-        name: str = "agent-wallet",
-        blockchain: str = "arcTestnet",
-    ) -> AgentWallet:
-        """
-        Create a new Circle-managed wallet for an agent.
-        
-        Args:
-            wallet_set_id: ID of the wallet set to create wallet in (required)
-            name: Human-readable name (e.g., "trading-agent-001")
-            blockchain: Target blockchain (default: arcTestnet)
-                Supported: arcTestnet, baseSepolia, ethereumSepolia, 
-                          ethereum, base, polygon, arbitrum, etc.
-            
-        Returns:
-            AgentWallet with wallet_id and on-chain address
-            
-        Example:
-            wallet = manager.create_wallet(
-                wallet_set_id="ws-123",
-                name="my-agent",
-                blockchain="arcTestnet"
-            )
-            print(f"Address: {wallet.address}")
-        """
-        normalized_blockchain = self._normalize_blockchain(blockchain)
-        
-        # Call Circle API
-        response = self._wallets_api.create_wallet(
-            create_wallet_request=CreateWalletRequest(
-                idempotencyKey=self._generate_idempotency_key(),
-                entitySecretCiphertext=self._entity_secret_ciphertext,
-                walletSetId=wallet_set_id,
-                blockchains=[normalized_blockchain],
-                metadata=[WalletMetadata(name=name)],
-            )
-        )
-        
-        # Extract wallet from response (SDK uses wrapper class)
-        wallet_wrapper = response.data.wallets[0]
-        wallet_data = wallet_wrapper.actual_instance if hasattr(wallet_wrapper, 'actual_instance') else wallet_wrapper
-        
-        return AgentWallet(
-            wallet_id=wallet_data.id,
-            address=wallet_data.address,
-            blockchain=wallet_data.blockchain,
-            name=name,
-            state=getattr(wallet_data, 'state', None),
-            wallet_set_id=wallet_set_id,
-        )
-    
-    def get_wallet(self, wallet_id: str) -> AgentWallet:
-        """
-        Retrieve an existing wallet by ID.
-        
-        Args:
-            wallet_id: Circle wallet ID
-            
-        Returns:
-            AgentWallet with current details
-        """
-        response = self._wallets_api.get_wallet(id=wallet_id)
-        wallet_wrapper = response.data.wallet
-        # SDK uses wrapper class with actual_instance
-        wallet_data = wallet_wrapper.actual_instance if hasattr(wallet_wrapper, 'actual_instance') else wallet_wrapper
-        
-        return AgentWallet(
-            wallet_id=wallet_data.id,
-            address=wallet_data.address,
-            blockchain=wallet_data.blockchain,
-            name=getattr(wallet_data, 'name', None),
-            state=getattr(wallet_data, 'state', None),
-            wallet_set_id=getattr(wallet_data, 'wallet_set_id', None),
-        )
-    
-    def list_wallets(self, wallet_set_id: Optional[str] = None) -> List[AgentWallet]:
-        """
-        List all wallets.
-        
-        Args:
-            wallet_set_id: Filter by wallet set (optional)
-            
-        Returns:
-            List of AgentWallet instances
-        """
-        # Call without extra params - the SDK handles pagination internally
-        if wallet_set_id:
-            response = self._wallets_api.get_wallets(wallet_set_id=wallet_set_id)
-        else:
-            response = self._wallets_api.get_wallets()
-        
-        result = []
-        for w in response.data.wallets:
-            # SDK uses wrapper class with actual_instance
-            actual = w.actual_instance if hasattr(w, 'actual_instance') else w
-            result.append(AgentWallet(
-                wallet_id=actual.id,
-                address=actual.address,
-                blockchain=actual.blockchain,
-                name=getattr(actual, 'name', None),
-                state=getattr(actual, 'state', None),
-                wallet_set_id=getattr(actual, 'wallet_set_id', None),
-            ))
-        return result
-    
-    def sign_message(
-        self,
         wallet_id: str,
-        message: str,
-    ) -> SignatureResult:
-        """
-        Sign a message using the wallet's key (managed by Circle).
-        
-        This can be used for:
-        - Verifying wallet ownership
-        - Off-chain authentication
-        - Custom signing needs
-        
-        Args:
-            wallet_id: Circle wallet ID
-            message: Message to sign (will be prefixed with EIP-191)
-            
-        Returns:
-            SignatureResult with hex signature
-        """
-        response = self._signing_api.sign_message(
-            sign_message_request=SignMessageRequest(
-                walletId=wallet_id,
-                message=message,
-                entitySecretCiphertext=self._entity_secret_ciphertext,
+        wallet_address: str | None = None,
+        api_key: str | None = None,
+        entity_secret: str | None = None,
+    ):
+        if not HAS_CIRCLE_WALLETS:
+            raise ImportError(
+                "circle-developer-controlled-wallets package required. "
+                "Install with: pip install circle-titanoboa-sdk[wallets]"
             )
+
+        api_key = api_key or os.environ.get("CIRCLE_API_KEY")
+        entity_secret = entity_secret or os.environ.get("CIRCLE_ENTITY_SECRET")
+
+        if not api_key:
+            raise ValueError("api_key is required. Pass it directly or set CIRCLE_API_KEY env var.")
+        if not entity_secret:
+            raise ValueError(
+                "entity_secret is required. Pass it directly or set CIRCLE_ENTITY_SECRET env var."
+            )
+
+        self._wallet_id = wallet_id
+
+        client = init_developer_controlled_wallets_client(
+            api_key=api_key, entity_secret=entity_secret
         )
-        
-        return SignatureResult(
-            signature=response.data.signature,
-            wallet_id=wallet_id,
-        )
-    
+        self._signing_api = SigningApi(client)
+        self._wallets_api = WalletsApi(client)
+
+        if wallet_address is not None:
+            self._address = wallet_address
+        else:
+            # SDK returns WalletResponse with .data.wallet structure
+            response = self._wallets_api.get_wallet(id=wallet_id)
+            self._address = _extract_wallet_address(response)
+
+    def __repr__(self) -> str:
+        return f"CircleWalletSigner(wallet_id={self._wallet_id!r}, address={self._address})"
+
+    @property
+    def address(self) -> str:
+        return self._address
+
     def sign_typed_data(
         self,
-        wallet_id: str,
-        typed_data: Dict[str, Any],
-    ) -> SignatureResult:
-        """
-        Sign EIP-712 typed data using the wallet's key.
-        
-        This is used for:
-        - x402 TransferWithAuthorization signatures
-        - Permit signatures
-        - Any EIP-712 structured data
-        
-        Args:
-            wallet_id: Circle wallet ID
-            typed_data: EIP-712 typed data structure with:
-                - domain: EIP-712 domain
-                - types: Type definitions
-                - primaryType: Primary type name
-                - message: Message data
-            
-        Returns:
-            SignatureResult with hex signature
-            
-        Example:
-            typed_data = {
-                "domain": {...},
-                "types": {...},
-                "primaryType": "TransferWithAuthorization",
-                "message": {...}
-            }
-            result = manager.sign_typed_data(wallet_id, typed_data)
-        """
-        import json
-        
-        # Circle SDK expects the typed data as a JSON string in the 'data' field
+        domain: dict[str, Any],
+        types: dict[str, list[dict[str, str]]],
+        primary_type: str,
+        message: dict[str, Any],
+    ) -> str:
+        """Sign EIP-712 typed data via Circle's signing API."""
+        # Build EIP712Domain type from the domain keys present
+        domain_type: list[dict[str, str]] = []
+        if "name" in domain:
+            domain_type.append({"name": "name", "type": "string"})
+        if "version" in domain:
+            domain_type.append({"name": "version", "type": "string"})
+        if "chainId" in domain:
+            domain_type.append({"name": "chainId", "type": "uint256"})
+        if "verifyingContract" in domain:
+            domain_type.append({"name": "verifyingContract", "type": "address"})
+
+        full_message = {
+            "types": {
+                "EIP712Domain": domain_type,
+                **types,
+            },
+            "primaryType": primary_type,
+            "domain": domain,
+            "message": message,
+        }
+
+        # Circle's REST API takes a JSON string for the data field
+        data_json = json.dumps(full_message)
+
+        # entitySecretCiphertext is auto-filled by the SDK's @auto_fill decorator
+        # on SigningApi.sign_typed_data. The decorator calls
+        # api_client.fill_entity_secret_ciphertext() which generates a fresh
+        # ciphertext from the entity_secret stored in the client configuration.
+        # SignTypedDataRequest.__init__ defaults it to a "#REFILL_PLACEHOLDER"
+        # sentinel that the decorator detects and replaces.
         response = self._signing_api.sign_typed_data(
-            sign_typed_data_request=SignTypedDataRequest(
-                walletId=wallet_id,
-                data=json.dumps(typed_data),
-                entitySecretCiphertext=self._entity_secret_ciphertext,
-            )
+            SignTypedDataRequest(
+                walletId=self._wallet_id,
+                data=data_json,
+            ),
         )
-        
-        return SignatureResult(
-            signature=response.data.signature,
-            wallet_id=wallet_id,
-        )
-    
-    def get_wallet_balance(
+
+        # SignatureResponse has .data.signature (no actual_instance wrapper)
+        signature: str = response.data.signature
+
+        if not signature.startswith("0x"):
+            signature = "0x" + signature
+
+        return signature
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _normalize_to_hex(v: str | bytes) -> str:
+    """Convert bytes or hex string to 0x-prefixed hex string.
+
+    Used for AbiParametersInner values (attestation, signature).
+    """
+    if isinstance(v, bytes):
+        if not v:
+            raise ValueError("Expected non-empty bytes")
+        return "0x" + v.hex()
+    if not v:
+        raise ValueError("Expected non-empty hex string")
+    s = v if v.startswith("0x") else "0x" + v
+    if len(s) <= 2:
+        raise ValueError("Expected non-empty hex string")
+    return s
+
+
+def _extract_wallet_address(wallet_response: Any) -> str:
+    """Extract wallet address from SDK response across model-shape variants."""
+    data = getattr(wallet_response, "data", None)
+    wallet = getattr(data, "wallet", None)
+    if wallet is None:
+        raise RuntimeError("Circle wallet response missing wallet data")
+
+    address = getattr(wallet, "address", None)
+    if isinstance(address, str) and address:
+        return address
+
+    actual = getattr(wallet, "actual_instance", None)
+    address = getattr(actual, "address", None)
+    if isinstance(address, str) and address:
+        return address
+
+    raise RuntimeError("Circle wallet response missing wallet address")
+
+
+# ---------------------------------------------------------------------------
+# Exceptions
+# ---------------------------------------------------------------------------
+
+
+class CircleTransactionError(Exception):
+    """Raised when a Circle transaction reaches a terminal failure state."""
+
+    def __init__(self, transaction_id: str, state: str, error_reason: str | None = None):
+        self.transaction_id = transaction_id
+        self.state = state
+        self.error_reason = error_reason
+        detail = f": {error_reason}" if error_reason else ""
+        super().__init__(f"Transaction {transaction_id} {state}{detail}")
+
+
+class CircleTransactionTimeoutError(CircleTransactionError):
+    """Raised when polling for a Circle transaction exceeds the timeout."""
+
+    def __init__(self, transaction_id: str, timeout: float):
+        super().__init__(transaction_id, "TIMEOUT", f"exceeded {timeout}s")
+        self.timeout = timeout
+
+
+# ---------------------------------------------------------------------------
+# CircleTxExecutor
+# ---------------------------------------------------------------------------
+
+# Terminal states indicating a transaction has completed (success or failure)
+_SUCCESS_STATES = frozenset({"CONFIRMED", "COMPLETE", "CLEARED"})
+_FAILURE_STATES = frozenset({"FAILED", "CANCELLED", "DENIED"})
+
+
+class CircleTxExecutor:
+    """
+    TxExecutor backed by Circle Developer-Controlled Wallets.
+
+    Implements the TxExecutor protocol (circlekit.tx_executor.TxExecutor) by
+    submitting contract-execution transactions via Circle's API and polling
+    until they reach a terminal state.
+
+    No private key material is ever exposed — all transactions are executed
+    by Circle's MPC infrastructure.
+    """
+
+    def __init__(
         self,
         wallet_id: str,
-    ) -> List[Dict[str, Any]]:
-        """
-        Get token balances for a wallet.
-        
-        Args:
-            wallet_id: Circle wallet ID
-            
-        Returns:
-            List of balance objects with token info
-        """
-        response = self._wallets_api.list_wallet_balance(id=wallet_id)
-        
-        return [
-            {
-                "token": b.token.symbol if hasattr(b.token, 'symbol') else str(b.token),
-                "amount": b.amount,
-                "blockchain": b.blockchain if hasattr(b, 'blockchain') else None,
-            }
-            for b in response.data.token_balances
-        ]
+        wallet_address: str | None = None,
+        api_key: str | None = None,
+        entity_secret: str | None = None,
+        poll_interval: float = 1.0,
+        timeout: float = 120.0,
+    ):
+        if not HAS_CIRCLE_WALLETS:
+            raise ImportError(
+                "circle-developer-controlled-wallets package required. "
+                "Install with: pip install circle-titanoboa-sdk[wallets]"
+            )
 
+        api_key = api_key or os.environ.get("CIRCLE_API_KEY")
+        entity_secret = entity_secret or os.environ.get("CIRCLE_ENTITY_SECRET")
 
-def create_agent_wallet_manager(
-    api_key: Optional[str] = None,
-    entity_secret: Optional[str] = None,
-) -> AgentWalletManager:
-    """
-    Create an AgentWalletManager instance.
-    
-    Convenience function for quick setup.
-    
-    Args:
-        api_key: Circle API key (or set CIRCLE_API_KEY env var)
-        entity_secret: Circle entity secret (or set CIRCLE_ENTITY_SECRET env var)
-    
-    Example:
-        manager = create_agent_wallet_manager()
-        
-        # Create wallet set first
-        wallet_set = manager.create_wallet_set("my-agents")
-        
-        # Then create wallet
-        wallet = manager.create_wallet(wallet_set.wallet_set_id, "my-agent")
-    """
-    return AgentWalletManager(api_key=api_key, entity_secret=entity_secret)
+        if not api_key:
+            raise ValueError("api_key is required. Pass it directly or set CIRCLE_API_KEY env var.")
+        if not entity_secret:
+            raise ValueError(
+                "entity_secret is required. Pass it directly or set CIRCLE_ENTITY_SECRET env var."
+            )
+
+        self._wallet_id = wallet_id
+        self._poll_interval = poll_interval
+        self._timeout = timeout
+
+        client = init_developer_controlled_wallets_client(
+            api_key=api_key, entity_secret=entity_secret
+        )
+        self._transactions_api = TransactionsApi(client)
+        self._wallets_api = WalletsApi(client)
+
+        if wallet_address is not None:
+            self._address = wallet_address
+        else:
+            response = self._wallets_api.get_wallet(id=wallet_id)
+            self._address = _extract_wallet_address(response)
+
+        self._http = httpx.Client()
+
+    def __repr__(self) -> str:
+        return f"CircleTxExecutor(wallet_id={self._wallet_id!r}, address={self._address})"
+
+    @property
+    def address(self) -> str:
+        return self._address
+
+    # -- core helper ---------------------------------------------------------
+
+    def _submit_and_wait(
+        self,
+        contract_address: str,
+        abi_function_signature: str,
+        abi_parameters: list[str],
+    ) -> str:
+        """Submit a contract-execution transaction and poll until terminal.
+
+        Parameters are positional plain values matching the types declared in
+        abi_function_signature.  The Circle API infers types from the
+        signature, so each element is just the value itself — e.g.
+        ``["0xAddress", "1000000"]`` for ``approve(address,uint256)``.
+
+        All callers in this class pre-stringify values; the annotation is
+        ``list[str]`` to reflect that.  ``AbiParametersInner`` itself also
+        accepts ``int | bool | list`` if needed by future callers.
+
+        Returns the on-chain tx_hash on success.
+        Raises CircleTransactionError on failure or CircleTransactionTimeoutError
+        if polling exceeds the configured timeout.
+        """
+        request = CreateContractExecutionTransactionForDeveloperRequest(
+            walletId=self._wallet_id,
+            contractAddress=contract_address,
+            abiFunctionSignature=abi_function_signature,
+            abiParameters=[AbiParametersInner(p) for p in abi_parameters],
+            feeLevel=FeeLevel("HIGH"),
+        )
+
+        response = self._transactions_api.create_developer_transaction_contract_execution(request)
+        data = getattr(response, "data", None)
+        # Circle SDK model shape varies by version:
+        # - Newer: response.data.id
+        # - Older: response.data.transaction.id
+        tx_id = getattr(data, "id", None)
+        if not isinstance(tx_id, str) or not tx_id:
+            tx = getattr(data, "transaction", None)
+            tx_id = getattr(tx, "id", None)
+        if not isinstance(tx_id, str) or not tx_id:
+            raise RuntimeError("Circle transaction submit response missing transaction id")
+
+        deadline = time.monotonic() + self._timeout
+        while True:
+            poll = self._transactions_api.get_transaction(id=tx_id)
+            poll_data = getattr(poll, "data", None)
+            tx = getattr(poll_data, "transaction", None)
+            # Defensive compatibility path: if SDK flattens transaction fields
+            # into `data`, treat `data` itself as the transaction object.
+            if tx is None and poll_data is not None and hasattr(poll_data, "state"):
+                tx = poll_data
+            if tx is None:
+                raise RuntimeError("Circle transaction poll response missing transaction data")
+            state = tx.state
+
+            if state in _SUCCESS_STATES:
+                result: str = tx.tx_hash
+                return result
+
+            if state in _FAILURE_STATES:
+                error_reason = getattr(tx, "error_reason", None)
+                raise CircleTransactionError(tx_id, state, error_reason)
+
+            if time.monotonic() >= deadline:
+                raise CircleTransactionTimeoutError(tx_id, self._timeout)
+
+            time.sleep(self._poll_interval)
+
+    # -- TxExecutor protocol methods -----------------------------------------
+
+    def execute_approve(
+        self, chain: str, owner: str, spender: str, amount: int, rpc_url: str | None = None
+    ) -> str:
+        config = get_chain_config(chain)
+        return self._submit_and_wait(
+            contract_address=config.usdc_address,
+            abi_function_signature="approve(address,uint256)",
+            abi_parameters=[spender, str(amount)],
+        )
+
+    def execute_deposit(
+        self, chain: str, owner: str, amount: int, rpc_url: str | None = None
+    ) -> str:
+        config = get_chain_config(chain)
+        return self._submit_and_wait(
+            contract_address=config.gateway_address,
+            abi_function_signature="deposit(address,uint256)",
+            abi_parameters=[config.usdc_address, str(amount)],
+        )
+
+    def execute_deposit_for(
+        self, chain: str, owner: str, depositor: str, amount: int, rpc_url: str | None = None
+    ) -> str:
+        config = get_chain_config(chain)
+        return self._submit_and_wait(
+            contract_address=config.gateway_address,
+            abi_function_signature="depositFor(address,address,uint256)",
+            abi_parameters=[config.usdc_address, depositor, str(amount)],
+        )
+
+    def execute_gateway_mint(
+        self,
+        chain: str,
+        attestation: str | bytes,
+        signature: str | bytes,
+        rpc_url: str | None = None,
+    ) -> str:
+        config = get_chain_config(chain)
+        att_hex = _normalize_to_hex(attestation)
+        sig_hex = _normalize_to_hex(signature)
+        return self._submit_and_wait(
+            contract_address=config.gateway_minter,
+            abi_function_signature="gatewayMint(bytes,bytes)",
+            abi_parameters=[att_hex, sig_hex],
+        )
+
+    def execute_initiate_withdrawal(
+        self, chain: str, owner: str, amount: int, rpc_url: str | None = None
+    ) -> str:
+        config = get_chain_config(chain)
+        return self._submit_and_wait(
+            contract_address=config.gateway_address,
+            abi_function_signature="initiateWithdrawal(address,uint256)",
+            abi_parameters=[config.usdc_address, str(amount)],
+        )
+
+    def execute_complete_withdrawal(
+        self, chain: str, owner: str, rpc_url: str | None = None
+    ) -> str:
+        config = get_chain_config(chain)
+        return self._submit_and_wait(
+            contract_address=config.gateway_address,
+            abi_function_signature="withdraw(address)",
+            abi_parameters=[config.usdc_address],
+        )
+
+    def check_allowance(
+        self, chain: str, owner: str, spender: str, rpc_url: str | None = None
+    ) -> int:
+        config = get_chain_config(chain)
+        url = rpc_url or config.rpc_url
+
+        owner_padded = owner[2:].lower().zfill(64)
+        spender_padded = spender[2:].lower().zfill(64)
+        call_data = f"0xdd62ed3e{owner_padded}{spender_padded}"
+
+        rpc_payload = {
+            "jsonrpc": "2.0",
+            "method": "eth_call",
+            "params": [
+                {"to": config.usdc_address, "data": call_data},
+                "latest",
+            ],
+            "id": 1,
+        }
+
+        response = self._http.post(url, json=rpc_payload)
+        response.raise_for_status()
+        body = response.json()
+
+        if "error" in body:
+            err = body["error"]
+            msg = err.get("message", err) if isinstance(err, dict) else err
+            raise RuntimeError(f"RPC error from {url}: {msg}")
+
+        hex_result = body.get("result")
+        if not hex_result:
+            raise RuntimeError(f"RPC response missing 'result' field from {url}")
+
+        return int(hex_result, 16)

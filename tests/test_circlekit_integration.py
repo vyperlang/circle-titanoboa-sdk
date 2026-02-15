@@ -1,144 +1,216 @@
 """
-Integration tests for circlekit - tests actual HTTP communication.
+Integration tests for circlekit - tests the process_request() adapter pattern.
 
-These tests verify the full x402 flow works end-to-end.
+These tests verify the middleware flow works correctly using mocked facilitator.
 """
 
-import pytest
-import asyncio
-import threading
-import time
-import os
-import sys
+import base64
+import json
+from unittest.mock import AsyncMock, patch
 
-# Add parent directory to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import pytest
+from circlekit.facilitator import SettleResponse, VerifyResponse
+from circlekit.server import create_gateway_middleware
+from circlekit.signer import PrivateKeySigner
+from circlekit.x402 import (
+    PAYMENT_REQUIRED_HEADER,
+    PAYMENT_RESPONSE_HEADER,
+    PaymentInfo,
+    PaymentRequirements,
+    create_payment_header,
+    decode_payment_required,
+    decode_payment_response,
+)
 
 
 class TestIntegration:
-    """Integration tests with actual HTTP server."""
-    
-    @pytest.fixture
-    def server_thread(self):
-        """Start the Flask server in a background thread."""
-        from flask import Flask
-        from circlekit import create_gateway_middleware
-        
-        app = Flask(__name__)
+    """Integration tests using process_request() adapter pattern."""
+
+    @pytest.mark.asyncio
+    async def test_no_payment_returns_402(self):
+        """Request without payment header returns 402."""
         gateway = create_gateway_middleware(
             seller_address="0x1234567890123456789012345678901234567890",
             chain="arcTestnet",
         )
-        
-        @app.route("/")
-        def index():
-            return {"status": "ok", "sdk": "circlekit-py"}
-        
-        @app.route("/health")
-        def health():
-            return {"healthy": True}
-        
-        @app.route("/api/paid")
-        @gateway.require("$0.01")
-        def paid(payment):
-            return {
-                "success": True,
-                "paid_by": payment.payer,
-                "amount": payment.amount,
-            }
-        
-        # Run server in thread
-        def run_server():
-            app.run(host="127.0.0.1", port=4099, debug=False, use_reloader=False)
-        
-        thread = threading.Thread(target=run_server, daemon=True)
-        thread.start()
-        
-        # Wait for server to start
-        time.sleep(1)
-        
-        yield "http://127.0.0.1:4099"
-        
-        # Server will be killed when thread ends
-    
-    def test_free_endpoint(self, server_thread):
-        """Free endpoint should return 200."""
-        import httpx
-        
-        response = httpx.get(f"{server_thread}/")
-        
-        assert response.status_code == 200
-        data = response.json()
-        assert data["status"] == "ok"
-        assert data["sdk"] == "circlekit-py"
-    
-    def test_health_endpoint(self, server_thread):
-        """Health endpoint should return 200."""
-        import httpx
-        
-        response = httpx.get(f"{server_thread}/health")
-        
-        assert response.status_code == 200
-        assert response.json()["healthy"] == True
-    
-    def test_paid_endpoint_returns_402(self, server_thread):
-        """Paid endpoint without payment should return 402."""
-        import httpx
-        
-        response = httpx.get(f"{server_thread}/api/paid")
-        
-        assert response.status_code == 402
-        data = response.json()
-        assert "x402Version" in data
-        assert data["x402Version"] == 2
-        assert "accepts" in data
-        assert len(data["accepts"]) == 1
-        assert data["accepts"][0]["scheme"] == "exact"
-        assert data["accepts"][0]["extra"]["name"] == "GatewayWalletBatched"
-    
-    @pytest.mark.asyncio
-    async def test_client_can_pay(self, server_thread):
-        """Client should be able to pay for resource."""
-        from circlekit import GatewayClient
-        
-        client = GatewayClient(
-            chain="arcTestnet",
-            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+
+        result = await gateway.process_request(
+            payment_header=None,
+            path="/api/paid",
+            price="$0.01",
         )
-        
-        # Pay for the resource
-        result = await client.pay(f"{server_thread}/api/paid")
-        
-        # Should succeed
-        assert result.status == 200
-        assert result.data["success"] == True
-        assert result.data["paid_by"] == client.address
-        assert result.formatted_amount == "$0.010000"
-        
-        await client.close()
-    
+
+        assert isinstance(result, dict)
+        assert result["status"] == 402
+        body = result["body"]
+        assert "x402Version" in body
+        assert body["x402Version"] == 2
+        assert "accepts" in body
+        assert len(body["accepts"]) == 1
+        assert body["accepts"][0]["scheme"] == "exact"
+        assert body["accepts"][0]["extra"]["name"] == "GatewayWalletBatched"
+        # Verify PAYMENT-REQUIRED header
+        assert "headers" in result
+        assert PAYMENT_REQUIRED_HEADER in result["headers"]
+        decoded = decode_payment_required(result["headers"][PAYMENT_REQUIRED_HEADER])
+        assert decoded.x402_version == 2
+        assert len(decoded.accepts) == 1
+        await gateway.close()
+
     @pytest.mark.asyncio
-    async def test_client_supports_check(self, server_thread):
-        """Client.supports() should detect x402 support."""
-        from circlekit import GatewayClient
-        
-        client = GatewayClient(
+    async def test_valid_payment_returns_payment_info(self):
+        """Request with valid payment returns PaymentInfo."""
+        gateway = create_gateway_middleware(
+            seller_address="0x1234567890123456789012345678901234567890",
             chain="arcTestnet",
-            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
         )
-        
-        # Check free endpoint
-        free_result = await client.supports(f"{server_thread}/")
-        assert free_result.supported == True
-        assert free_result.requirements is None  # Free resource
-        
-        # Check paid endpoint
-        paid_result = await client.supports(f"{server_thread}/api/paid")
-        assert paid_result.supported == True
-        assert paid_result.requirements is not None
-        assert paid_result.requirements["amount"] == "10000"
-        
-        await client.close()
+
+        # Create a signed payment header
+        signer = PrivateKeySigner(
+            "0x0000000000000000000000000000000000000000000000000000000000000001"
+        )
+        requirements = PaymentRequirements(
+            scheme="exact",
+            network="eip155:5042002",
+            asset="0x3600000000000000000000000000000000000000",
+            amount="10000",
+            pay_to="0x1234567890123456789012345678901234567890",
+            extra={
+                "name": "GatewayWalletBatched",
+                "version": "1",
+                "verifyingContract": "0x0077777d7EBA4688BDeF3E311b846F25870A19B9",
+            },
+        )
+        resource = {"url": "/api/paid", "description": "Paid resource"}
+        header = create_payment_header(signer, requirements, resource=resource)
+
+        # Mock the facilitator to approve
+        with (
+            patch.object(gateway._facilitator, "verify", new_callable=AsyncMock) as mock_verify,
+            patch.object(gateway._facilitator, "settle", new_callable=AsyncMock) as mock_settle,
+        ):
+            mock_verify.return_value = VerifyResponse(is_valid=True)
+            mock_settle.return_value = SettleResponse(success=True, transaction="0xtx123")
+
+            result = await gateway.process_request(
+                payment_header=header,
+                path="/api/paid",
+                price="$0.01",
+            )
+
+        assert isinstance(result, PaymentInfo)
+        assert result.verified is True
+        assert result.payer == signer.address
+        assert result.transaction == "0xtx123"
+        # Verify PAYMENT-RESPONSE header
+        assert PAYMENT_RESPONSE_HEADER in result.response_headers
+        receipt = decode_payment_response(result.response_headers[PAYMENT_RESPONSE_HEADER])
+        assert receipt["success"] is True
+        assert receipt["transaction"] == "0xtx123"
+        assert receipt["payer"] == signer.address
+        await gateway.close()
+
+    @pytest.mark.asyncio
+    async def test_invalid_payment_returns_402(self):
+        """Request with invalid payment header returns 402 error."""
+        gateway = create_gateway_middleware(
+            seller_address="0x1234567890123456789012345678901234567890",
+            chain="arcTestnet",
+        )
+
+        # Send a garbage header
+        result = await gateway.process_request(
+            payment_header="not-valid-base64!!!",
+            path="/api/paid",
+            price="$0.01",
+        )
+
+        assert isinstance(result, dict)
+        assert result["status"] == 402
+        assert "error" in result["body"]
+        await gateway.close()
+
+    @pytest.mark.asyncio
+    async def test_failed_verification_returns_402(self):
+        """Request that fails verification returns 402."""
+        gateway = create_gateway_middleware(
+            seller_address="0x1234567890123456789012345678901234567890",
+            chain="arcTestnet",
+        )
+
+        # Create a valid header structure
+        fake_header = base64.b64encode(
+            json.dumps(
+                {
+                    "payload": {
+                        "authorization": {"from": "0xabc", "value": "10000"},
+                        "signature": "0x123",
+                    },
+                    "accepted": {},
+                }
+            ).encode()
+        ).decode()
+
+        with patch.object(gateway._facilitator, "verify", new_callable=AsyncMock) as mock_verify:
+            mock_verify.return_value = VerifyResponse(is_valid=False)
+
+            result = await gateway.process_request(
+                payment_header=fake_header,
+                path="/api/paid",
+                price="$0.01",
+            )
+
+        assert isinstance(result, dict)
+        assert result["status"] == 402
+        assert "invalid" in result["body"]["error"].lower()
+        await gateway.close()
+
+    @pytest.mark.asyncio
+    async def test_multi_network_payment_on_accepted_chain(self):
+        """Payment on an accepted network succeeds with correct chain config."""
+        gateway = create_gateway_middleware(
+            seller_address="0x1234567890123456789012345678901234567890",
+            chain="arcTestnet",
+            networks=["arcTestnet", "baseSepolia"],
+        )
+
+        # Create a payment for baseSepolia (not the primary chain)
+        signer = PrivateKeySigner(
+            "0x0000000000000000000000000000000000000000000000000000000000000001"
+        )
+        requirements = PaymentRequirements(
+            scheme="exact",
+            network="eip155:84532",
+            asset="0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+            amount="10000",
+            pay_to="0x1234567890123456789012345678901234567890",
+            extra={
+                "name": "GatewayWalletBatched",
+                "version": "1",
+                "verifyingContract": "0x0077777d7EBA4688BDeF3E311b846F25870A19B9",
+            },
+        )
+        resource = {"url": "/api/paid", "description": "Paid resource"}
+        header = create_payment_header(signer, requirements, resource=resource)
+
+        with (
+            patch.object(gateway._facilitator, "verify", new_callable=AsyncMock) as mock_verify,
+            patch.object(gateway._facilitator, "settle", new_callable=AsyncMock) as mock_settle,
+        ):
+            mock_verify.return_value = VerifyResponse(is_valid=True)
+            mock_settle.return_value = SettleResponse(success=True, transaction="0xtx_base")
+
+            result = await gateway.process_request(
+                payment_header=header,
+                path="/api/paid",
+                price="$0.01",
+            )
+
+        assert isinstance(result, PaymentInfo)
+        assert result.verified is True
+        assert result.network == "eip155:84532"
+        assert result.transaction == "0xtx_base"
+        await gateway.close()
 
 
 if __name__ == "__main__":

@@ -8,7 +8,6 @@ Usage:
 
 This shows balances on Arc Testnet and Base Sepolia.
 
-Port of: basic-paywall/check-balances.ts
 """
 
 import asyncio
@@ -49,8 +48,12 @@ async def main():
         print(f"Wallet USDC:        {arc_balances.wallet.formatted}")
         print(f"Gateway Total:      {arc_balances.gateway.formatted_total}")
         print(f"Gateway Available:  {arc_balances.gateway.formatted_available}")
-        print(f"Gateway Withdrawing: {arc_balances.gateway.formatted_withdrawing} (trustless in progress)")
-        print(f"Gateway Withdrawable: {arc_balances.gateway.formatted_withdrawable} (trustless ready)")
+        print(
+            f"Gateway Withdrawing: {arc_balances.gateway.formatted_withdrawing} (trustless in progress)"
+        )
+        print(
+            f"Gateway Withdrawable: {arc_balances.gateway.formatted_withdrawable} (trustless ready)"
+        )
     except Exception as e:
         print(f"⚠️  Could not fetch Arc balances: {e}")
         arc_balances = None

@@ -1,13 +1,13 @@
 [project]
 name = "circle-titanoboa-sdk"
 version = "0.1.0"
-description = "Python SDK for Circle's x402 Protocol, Gateway, and Programmable Wallets - using titanoboa for Vyper contract interactions"
+description = "Python SDK for x402 with Circle Gateway batching - using titanoboa for Vyper contract interactions"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [
     { name = "Circle Hackathon Team" }
 ]
-keywords = ["circle", "usdc", "x402", "gateway", "payments", "micropayments", "titanoboa", "vyper", "arc", "programmable-wallets"]
+keywords = ["circle", "usdc", "x402", "gateway", "payments", "micropayments", "titanoboa", "vyper", "arc"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -23,29 +23,11 @@ dependencies = [
     "titanoboa>=0.2.0",
     "eth-account>=0.11.0",
     "httpx>=0.27.0",
-    "circle-developer-controlled-wallets>=9.2.0",  # Circle Programmable Wallets SDK
 ]
 
 [project.optional-dependencies]
-flask = [
-    "flask>=3.0.0",
-]
-fastapi = [
-    "fastapi>=0.109.0",
-    "uvicorn>=0.27.0",
-]
-dev = [
-    "pytest>=8.0.0",
-    "pytest-asyncio>=0.23.0",
-    "black>=24.0.0",
-    "isort>=5.13.0",
-    "mypy>=1.8.0",
-]
-all = [
-    "flask>=3.0.0",
-    "fastapi>=0.109.0",
-    "uvicorn>=0.27.0",
-]
+x402 = ["x402[httpx]>=2.0.0"]
+wallets = ["circle-developer-controlled-wallets>=9.0.0"]
 
 [project.urls]
 Homepage = "https://github.com/circle-hackathon/circle-titanoboa-sdk"
@@ -63,21 +45,36 @@ packages = ["circlekit"]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
-# Use --forked for test isolation (boa env pollution prevention)
 # Disable titanoboa pytest plugin - it tries to use evm_snapshot on real RPCs which fails.
-addopts = "-v --tb=short -p no:titanoboa --forked"
+addopts = "-v --tb=short -p no:titanoboa"
 asyncio_mode = "auto"
-
-[tool.black]
-line-length = 100
-target-version = ["py310", "py311", "py312"]
-
-[tool.isort]
-profile = "black"
-line_length = 100
 
 [tool.mypy]
 python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true
+
+[dependency-groups]
+dev = [
+    "mypy>=1.8.0",
+    "pre-commit>=4.5.1",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=5.0.0",
+    "ruff>=0.15.1",
+    "x402[httpx]>=2.0.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["circlekit", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

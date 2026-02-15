@@ -1,101 +1,36 @@
 # circle-titanoboa-sdk
 
-Python SDK for Circle's x402 Protocol and Gateway API. Uses **titanoboa** for all on-chain interactions (no web3.py).
+Python SDK for [x402](https://github.com/coinbase/x402) with Circle Gateway batching. Uses **titanoboa** for on-chain interactions.
 
-> Built for the [Vyper](https://github.com/vyperlang/vyper) ecosystem. Port of Circle's TypeScript SDK (`@circlefin/x402-batching`).
-
-## What It Does
-
-**circle-titanoboa-sdk** enables gasless micropayments for Python applications:
-
-1. **Buyers** can pay for API access without gas fees (signatures only)
-2. **Sellers** can monetize APIs with simple decorators
-3. **Settlement** happens in batches via Circle Gateway
-
-```
-User Request -> 402 Payment Required -> Sign Message (free) -> Access Granted
-                                             |
-                              Circle Gateway batches payments on-chain
-```
-
-## Features
-
-- **x402 Payment Protocol** - HTTP 402 Payment Required flow
-- **Gateway Client** - Pay for x402-protected resources with USDC
-- **Gateway Middleware** - Protect Flask/FastAPI endpoints with paywalls
-- **Programmable Wallets** - Circle-managed wallets for agent identity (no raw private keys)
-- **Arc Testnet** - Circle's L2 where USDC is the native gas token
-- **Multi-chain** - Arc, Base, Ethereum, Avalanche (testnets + mainnets)
-- **Pure titanoboa** - No web3.py dependency
-
-## Circle Products Used
-
-| Product | Purpose | Module |
-|---------|---------|--------|
-| **Circle Gateway** | Gasless batched payments | `GatewayClient` |
-| **Programmable Wallets** | Agent wallet identity/signing | `AgentWalletManager` |
-| **USDC** | Payment token (EIP-3009) | All payment flows |
-| **x402 Protocol** | HTTP payment negotiation | `x402.py` |
+> Built for the [Vyper](https://github.com/vyperlang/vyper) ecosystem.
 
 ## Installation
 
 ```bash
-pip install -e .
+# As a dependency
+pip install .
 
-# With Flask support
-pip install -e ".[flask]"
+# With x402 integration
+pip install ".[x402]"
 
-# With all dependencies
-pip install -e ".[all]"
+# For development
+uv sync
 ```
 
 ## Getting Testnet USDC
 
-Before using the SDK, you need testnet USDC on Arc Testnet (or another supported chain).
-
-### Which Faucet Should I Use?
-
-| Wallet Type | Faucet | What You Get |
-|------------|--------|--------------|
-| **External wallet** (MetaMask, private key) | [Public Faucet](https://faucet.circle.com) | 20 USDC every 2 hours |
-| **Circle Programmable Wallet** | [Developer Console Faucet](https://console.circle.com/faucet) | 20 USDC + native tokens |
-
-### Public Faucet (Any Wallet)
-
-Use for wallets you control directly (MetaMask, private key, hardware wallet):
+You need testnet USDC on Arc Testnet (or another supported chain).
 
 1. Go to **[faucet.circle.com](https://faucet.circle.com)**
 2. Select **Arc Testnet**
-3. Paste your wallet **address** (`0x...`)
+3. Paste your wallet address
 4. Get **20 USDC** (every 2 hours per address per network)
 
-No login required. Works with any wallet address.
-
-### Developer Console Faucet (Circle Wallets)
-
-Use for Circle Programmable Wallets. Also provides native tokens for gas:
-
-1. Go to **[console.circle.com/faucet](https://console.circle.com/faucet)**
-2. Log in with your Circle developer account
-3. Enter your **Wallet ID** (not the address - find it in Console under Dev Controlled > Wallets)
-4. Get **20 USDC** + native tokens (10 requests per 24 hours per account)
-
-### API Faucet (Programmatic)
-
-Fund Circle Programmable Wallets via API:
-
-```bash
-curl -X POST https://api.circle.com/v1/faucet/drips \
-  -H "Authorization: Bearer YOUR_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"address": "0xYourAddress", "blockchain": "ARC-TESTNET", "usdc": true, "native": true}'
-```
-
-> **Note:** On Arc Testnet, USDC is the native gas token. You only need USDC for both payments and gas.
+> On Arc Testnet, USDC is the native gas token. You only need USDC for both payments and gas.
 
 ## Quick Start
 
-### As a Buyer (Pay for API Access)
+### Pay for a Resource (Buyer)
 
 ```python
 import asyncio
@@ -106,123 +41,97 @@ async def main():
         chain="arcTestnet",
         private_key="0x..."
     )
-    
-    # Pay for a resource (gasless!)
+
     result = await client.pay("https://api.example.com/premium")
-    
     print(f"Got: {result.data}")
     print(f"Paid: {result.formatted_amount} USDC")
-    
+
     await client.close()
 
 asyncio.run(main())
 ```
 
-### As a Seller (Create Paywalled APIs)
+### Protect an Endpoint (Seller)
+
+The middleware is framework-agnostic. Here's an example with FastAPI:
 
 ```python
-from flask import Flask, jsonify
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from circlekit import create_gateway_middleware
 
-app = Flask(__name__)
+app = FastAPI()
 
 gateway = create_gateway_middleware(
     seller_address="0xYourAddress",
-    chain="arcTestnet"
+    chain="arcTestnet",
 )
 
-@app.route("/premium")
-@gateway.require("0.01")  # $0.01 USDC
-def premium_endpoint():
-    return jsonify({"data": "Premium content"})
+@app.get("/api/analyze")
+async def analyze(request: Request):
+    result = await gateway.process_request(
+        payment_header=request.headers.get("PAYMENT-SIGNATURE"),
+        path=request.url.path,
+        price="$0.01",
+    )
 
-if __name__ == "__main__":
-    app.run(port=8000)
+    if isinstance(result, dict):
+        # 402: return body + PAYMENT-REQUIRED header
+        resp = JSONResponse(result["body"], status_code=result["status"])
+        for k, v in result.get("headers", {}).items():
+            resp.headers[k] = v
+        return resp
+
+    # Success: return data + PAYMENT-RESPONSE header
+    resp = JSONResponse({"data": "Premium content", "paid_by": result.payer})
+    for k, v in result.response_headers.items():
+        resp.headers[k] = v
+    return resp
 ```
 
-### Agent Wallets (Circle Programmable Wallets)
-
-Create agent wallets without managing raw private keys - Circle handles key security.
-
-#### Setup: Get Your API Key and Entity Secret
-
-Before using Programmable Wallets, you need credentials from Circle:
-
-1. **Get your API Key:**
-   - Go to [console.circle.com](https://console.circle.com)
-   - Navigate to **API Keys** in the sidebar
-   - Create a new API key or use an existing one
-   - Copy the key (starts with `TEST_API_KEY:` for testnet)
-
-2. **Generate your Entity Secret:**
-   - Go to [console.circle.com/wallets/dev/configurator/entity-secret](https://console.circle.com/wallets/dev/configurator/entity-secret)
-   - Click **Generate Entity Secret**
-   - **Important:** Save this secret securely. It cannot be retrieved later.
-   - Register the corresponding Entity Public Key with Circle
-
-3. **Set environment variables:**
-   ```bash
-   export CIRCLE_API_KEY="TEST_API_KEY:xxx..."
-   export CIRCLE_ENTITY_SECRET="your-entity-secret"
-   ```
-
-#### Usage
+### Multi-chain Support
 
 ```python
-from circlekit import AgentWalletManager
-
-# Initialize with Circle API credentials
-manager = AgentWalletManager(
-    api_key="your-api-key",        # Or os.environ["CIRCLE_API_KEY"]
-    entity_secret="your-secret"     # Or os.environ["CIRCLE_ENTITY_SECRET"]
+gateway = create_gateway_middleware(
+    seller_address="0xYourAddress",
+    chain="arcTestnet",
+    networks=["arcTestnet", "baseSepolia"],
 )
-
-# Create a wallet for an agent
-wallet = manager.create_wallet(
-    name="trading-agent-001",
-    blockchain="arcTestnet"
-)
-
-print(f"Agent address: {wallet.address}")
-print(f"Wallet ID: {wallet.wallet_id}")
-
-# List all agent wallets
-wallets = manager.list_wallets()
-
-# Sign messages (for verification or custom protocols)
-signature = manager.sign_message(wallet.wallet_id, "Hello World")
-
-# Sign EIP-712 typed data (for x402 payments or permits)
-typed_data_sig = manager.sign_typed_data(wallet.wallet_id, {
-    "domain": {...},
-    "types": {...},
-    "primaryType": "TransferWithAuthorization",
-    "message": {...}
-})
 ```
 
-**When to use Programmable Wallets vs Private Keys:**
+The 402 response will include one `accepts` entry per network, and incoming
+payments will be validated against the accepted set.
 
-| Approach | Use When |
-|----------|----------|
-| **Private Key** (`GatewayClient`) | Quick testing, personal use, existing wallets |
-| **Programmable Wallet** (`AgentWalletManager`) | Production agents, no key management, enterprise security |
+### Using with Standard x402
 
-**Programmable Wallet benefits:**
-- No private key management (Circle handles security)
-- Perfect for AI agents that need persistent identities
-- Fund wallets via [Developer Console Faucet](https://console.circle.com/faucet) (get native tokens + USDC)
-- Supports multiple blockchains with the same API
+If you already use the [`x402` Python package](https://github.com/coinbase/x402/tree/main/python), add Circle Gateway as a facilitator:
 
----
+```bash
+pip install circlekit[x402]
+```
+
+```python
+from circlekit.x402_integration import create_resource_server
+
+server = create_resource_server(is_testnet=True)
+server.initialize()
+
+# Use with FastAPI, Flask, or any framework
+```
+
+Or use `BatchFacilitatorClient` directly with `x402ResourceServer`:
+
+```python
+from x402.server import x402ResourceServer
+from circlekit import BatchFacilitatorClient
+
+server = x402ResourceServer(BatchFacilitatorClient())
+server.initialize()
+```
 
 ## Using with Vyper Contracts
 
-circle-titanoboa-sdk uses titanoboa internally, which means you can combine x402 payments with Vyper contract interactions seamlessly.
-
-### Demo 1: Paid Contract Query
-
-A Vyper contract that stores data, with a Python API that charges for reads:
+circle-titanoboa-sdk uses titanoboa internally, so you can combine x402 payments with Vyper contract interactions seamlessly.
 
 ```vyper
 # storage.vy
@@ -234,119 +143,74 @@ def set_value(val: uint256):
 ```
 
 ```python
-# paid_storage_api.py
 import boa
-from flask import Flask, jsonify
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from circlekit import create_gateway_middleware
 
-app = Flask(__name__)
+app = FastAPI()
 gateway = create_gateway_middleware(
     seller_address="0xYourAddress",
-    chain="arcTestnet"
+    chain="arcTestnet",
 )
 
-# Deploy or load Vyper contract using titanoboa
 boa.set_network_env("https://arc-testnet.drpc.org")
 storage = boa.load("storage.vy")
 
-@app.route("/read")
-@gateway.require("0.001")  # Pay $0.001 to read
-def read_value(payment):
-    value = storage.stored_value()
-    return jsonify({
-        "value": value,
-        "paid_by": payment.payer
-    })
-
-@app.route("/write/<int:val>", methods=["POST"])
-@gateway.require("0.01")  # Pay $0.01 to write
-def write_value(val, payment):
-    storage.set_value(val)
-    return jsonify({
-        "success": True,
-        "new_value": val,
-        "paid_by": payment.payer
-    })
-```
-
-### Demo 2: Agent Reputation with Payments
-
-Combine on-chain reputation (Vyper) with paid agent services:
-
-```vyper
-# agent_reputation.vy
-struct Feedback:
-    score: uint8
-    timestamp: uint256
-
-agent_scores: public(HashMap[address, DynArray[Feedback, 100]])
-
-@external
-def submit_feedback(agent: address, score: uint8):
-    assert score <= 100, "Score must be 0-100"
-    self.agent_scores[agent].append(Feedback({
-        score: score,
-        timestamp: block.timestamp
-    }))
-
-@view
-@external
-def get_average(agent: address) -> uint256:
-    feedbacks: DynArray[Feedback, 100] = self.agent_scores[agent]
-    if len(feedbacks) == 0:
-        return 0
-    total: uint256 = 0
-    for fb: Feedback in feedbacks:
-        total += convert(fb.score, uint256)
-    return total / len(feedbacks)
-```
-
-```python
-# agent_with_reputation.py
-import boa
-from circlekit import GatewayClient
-from circlekit.boa_utils import setup_boa_with_account
-
-async def pay_and_rate_agent():
-    # Set up client for payments
-    client = GatewayClient(
-        chain="arcTestnet",
-        private_key="0x..."
+@app.get("/read")
+async def read_value(request: Request):
+    result = await gateway.process_request(
+        payment_header=request.headers.get("PAYMENT-SIGNATURE"),
+        path=request.url.path,
+        price="$0.001",
     )
-    
-    # Load reputation contract via titanoboa
-    setup_boa_with_account("arcTestnet", "0x...")
-    reputation = boa.load("agent_reputation.vy")
-    
-    # 1. Check agent reputation before paying
-    agent_addr = "0xAgentAddress..."
-    avg_score = reputation.get_average(agent_addr)
-    print(f"Agent reputation: {avg_score}/100")
-    
-    # 2. Pay for agent service (gasless via Gateway)
-    result = await client.pay("http://agent.example.com/api/analyze")
-    print(f"Paid {result.formatted_amount} for: {result.data}")
-    
-    # 3. Submit feedback on-chain (uses titanoboa)
-    reputation.submit_feedback(agent_addr, 85)
-    print("Submitted feedback: 85/100")
-    
-    await client.close()
-```
 
----
+    if isinstance(result, dict):
+        resp = JSONResponse(result["body"], status_code=result["status"])
+        for k, v in result.get("headers", {}).items():
+            resp.headers[k] = v
+        return resp
+
+    value = storage.stored_value()
+    resp = JSONResponse({"value": value, "paid_by": result.payer})
+    for k, v in result.response_headers.items():
+        resp.headers[k] = v
+    return resp
+```
 
 ## API Reference
 
 ### GatewayClient
 
+`GatewayClient` separates two wallet capabilities:
+
+| Capability | Protocol | Used by |
+|------------|----------|---------|
+| **EIP-712 signing** | `Signer` | `pay()`, `withdraw()` intent |
+| **Onchain tx execution** | `TxExecutor` | `deposit()`, `withdraw()` mint |
+
 ```python
 from circlekit import GatewayClient
 
+# Simple — private_key creates both a Signer and TxExecutor:
 client = GatewayClient(
-    chain="arcTestnet",      # Chain name
-    private_key="0x...",     # Private key for signing
+    chain="arcTestnet",
+    private_key="0x...",
     rpc_url=None             # Optional custom RPC
+)
+
+# Pay-only — signer is enough for gasless payments:
+from circlekit import PrivateKeySigner
+signer = PrivateKeySigner("0x...")
+client = GatewayClient(chain="arcTestnet", signer=signer)
+# client.pay() works; client.deposit()/withdraw() raise ValueError
+
+# Advanced — inject capabilities separately:
+from circlekit import BoaTxExecutor
+client = GatewayClient(
+    chain="arcTestnet",
+    signer=my_signer,
+    tx_executor=BoaTxExecutor("0x..."),
 )
 
 # Properties
@@ -356,11 +220,25 @@ client.chain_id     # 5042002
 client.domain       # 26 (Gateway domain)
 
 # Methods
-result = await client.pay(url)                    # Pay for resource (gasless)
-balances = await client.get_balances()            # Check balances
+result = await client.pay(url)                    # Pay for resource (gasless, needs Signer)
+balances = await client.get_balances()            # Check balances (no capability needed)
 support = await client.supports(url)              # Check if URL accepts payments
-await client.deposit("10.0")                      # Deposit USDC to Gateway
-await client.withdraw("5.0", chain="baseSepolia") # Withdraw to another chain
+await client.deposit("10.0")                      # Deposit USDC to Gateway (needs TxExecutor)
+await client.withdraw("5.0", chain="baseSepolia") # Withdraw to another chain (needs both)
+```
+
+#### TxExecutor
+
+`TxExecutor` is a `Protocol` for executing onchain transactions. `BoaTxExecutor` is the default implementation using titanoboa with a private key.
+
+```python
+from circlekit import TxExecutor, BoaTxExecutor
+
+# Default implementation:
+executor = BoaTxExecutor("0xPrivateKey...")
+
+# Custom implementations can wrap any execution backend (e.g., Circle
+# Programmable Wallets) — just implement the TxExecutor protocol.
 ```
 
 ### create_gateway_middleware
@@ -370,18 +248,30 @@ from circlekit import create_gateway_middleware
 
 gateway = create_gateway_middleware(
     seller_address="0x...",      # Where to receive payments
-    chain="arcTestnet",          # Chain for pricing
-    description="My API"         # Description in 402 response
+    chain="arcTestnet",          # Primary chain
+    networks=["arcTestnet", "baseSepolia"],  # Accepted networks (optional)
+    description="My API",       # Description in 402 response
 )
 
-# Flask decorator
-@gateway.require("0.01")
-def endpoint():
-    pass
+# Framework-agnostic — use process_request() in any handler:
+result = await gateway.process_request(
+    payment_header=request.headers.get("PAYMENT-SIGNATURE"),
+    path=request.url.path,
+    price="$0.01",
+)
 
-# FastAPI dependency
-async def endpoint(payment=Depends(gateway.require_fastapi("0.01"))):
-    pass
+if isinstance(result, dict):
+    # 402 response — set PAYMENT-REQUIRED header
+    resp = JSONResponse(result["body"], status_code=result["status"])
+    for k, v in result.get("headers", {}).items():
+        resp.headers[k] = v
+    return resp
+else:
+    # PaymentInfo — set PAYMENT-RESPONSE header
+    resp = JSONResponse({"data": "..."})
+    for k, v in result.response_headers.items():
+        resp.headers[k] = v
+    return resp
 ```
 
 ### Low-Level x402 Functions
@@ -393,6 +283,7 @@ from circlekit.x402 import (
     is_batch_payment,
     get_verifying_contract,
 )
+from circlekit import PrivateKeySigner
 
 # Parse 402 response
 x402 = parse_402_response(response.content)
@@ -404,14 +295,11 @@ if is_batch_payment(requirements):
     print(f"Gateway contract: {contract}")
 
 # Create payment signature
-header = create_payment_header(
-    private_key="0x...",
-    payer_address="0x...",
-    requirements=requirements
-)
+signer = PrivateKeySigner("0x...")
+header = create_payment_header(signer=signer, requirements=requirements)
 
 # Retry with payment
-response = httpx.get(url, headers={"Payment-Signature": header})
+response = httpx.get(url, headers={"PAYMENT-SIGNATURE": header})
 ```
 
 ### titanoboa Utilities
@@ -420,21 +308,23 @@ response = httpx.get(url, headers={"Payment-Signature": header})
 from circlekit.boa_utils import (
     setup_boa_env,
     setup_boa_with_account,
-    load_usdc_contract,
-    load_gateway_contract,
     get_usdc_balance,
     get_gateway_balance,
     execute_approve,
     execute_deposit,
 )
+from circlekit.constants import get_chain_config
 
 # Read-only setup
 setup_boa_env("arcTestnet")
-usdc = load_usdc_contract("arcTestnet")
+config = get_chain_config("arcTestnet")
+
+import boa
+usdc = boa.load_partial("path/to/IERC20.json").at(config.usdc_address)
 balance = usdc.balanceOf("0x...")
 
 # Transaction setup (adds signing account)
-address, env = setup_boa_with_account("arcTestnet", "0xPrivateKey...")
+setup_boa_with_account("arcTestnet", "0xPrivateKey...")
 # Now you can deploy/call Vyper contracts with real transactions
 ```
 
@@ -443,85 +333,69 @@ address, env = setup_boa_with_account("arcTestnet", "0xPrivateKey...")
 | Network | Chain ID | Gateway Domain | Type |
 |---------|----------|----------------|------|
 | Arc Testnet | 5042002 | 26 | Testnet |
-| Base Sepolia | 84532 | 84532 | Testnet |
-| Ethereum Sepolia | 11155111 | 11155111 | Testnet |
-| Avalanche Fuji | 43113 | 43113 | Testnet |
-| Base | 8453 | 8453 | Mainnet |
-| Ethereum | 1 | 1 | Mainnet |
+| Base Sepolia | 84532 | 6 | Testnet |
+| Ethereum Sepolia | 11155111 | 0 | Testnet |
+| Avalanche Fuji | 43113 | 1 | Testnet |
+| HyperEVM Testnet | 998 | 19 | Testnet |
+| Sonic Testnet | 64165 | 13 | Testnet |
+| World Chain Sepolia | 4801 | 14 | Testnet |
+| Sei Atlantic | 1328 | 16 | Testnet |
+| Ethereum | 1 | 0 | Mainnet |
+| Base | 8453 | 6 | Mainnet |
+| Arbitrum | 42161 | 3 | Mainnet |
+| Polygon | 137 | 7 | Mainnet |
+| Optimism | 10 | 2 | Mainnet |
+| Avalanche | 43114 | 1 | Mainnet |
+| Sonic | 146 | 13 | Mainnet |
+| Unichain | 130 | 10 | Mainnet |
+| World Chain | 480 | 14 | Mainnet |
+| HyperEVM | 999 | 19 | Mainnet |
+| Sei | 1329 | 16 | Mainnet |
 
-**Note:** Arc Testnet uses USDC as the native gas token.
+**Note:** Arc Testnet uses USDC as the native gas token. Gateway Domain IDs are Circle's internal domain identifiers, not chain IDs.
 
-## Testing
+## Development
+
+### Setup
 
 ```bash
-# Unit tests (fast, no network)
-python3 -m pytest tests/test_circlekit.py tests/test_battle.py -v
+uv sync                     # Install all deps including dev group
+uv run pre-commit install   # Set up pre-commit hooks
+```
 
-# Integration tests (spins up Flask server)
-python3 -m pytest tests/test_circlekit_integration.py -v
+### Running Tests
 
-# Live verification (requires network, catches hallucinations)
-python3 -m pytest tests/test_live_verification.py -v -s
+```bash
+uv run pytest               # Unit tests (192 tests)
+
+# E2E tests (requires testnet USDC):
+PRIVATE_KEY=0x... uv run pytest tests/test_e2e.py -v -s
+```
+
+### Linting & Type Checking
+
+Pre-commit runs automatically on `git commit`, or manually:
+
+```bash
+uv run ruff check --fix circlekit/ tests/   # Lint
+uv run ruff format circlekit/ tests/         # Format
+uv run mypy circlekit/                       # Type check
 ```
 
 ## Architecture
 
 ```
 circlekit/
-├── __init__.py      # Package exports
-├── constants.py     # Chain configs (verified against live RPCs)
-├── boa_utils.py     # titanoboa helpers, EIP-712 signing, transactions
-├── x402.py          # x402 protocol (parse 402, create signatures)
-├── client.py        # GatewayClient (pay, deposit, withdraw, balances)
-└── server.py        # Flask/FastAPI middleware
-```
-
-## How x402 Works
-
-```
-1. Client: GET /premium
-2. Server: 402 Payment Required
-   {
-     "x402Version": 2,
-     "accepts": [{
-       "scheme": "exact",
-       "network": "eip155:5042002",
-       "amount": "10000",
-       "payTo": "0xSeller..."
-     }]
-   }
-3. Client: Signs EIP-712 TransferWithAuthorization (free, no gas)
-4. Client: GET /premium + Payment-Signature header
-5. Server: Verifies signature, serves content
-6. Gateway: Batches signatures, settles on-chain later
-```
-
-## TypeScript SDK Parity
-
-This SDK ports the following from `@circlefin/x402-batching`:
-
-| TypeScript | Python | Status |
-|------------|--------|--------|
-| `GatewayClient` | `GatewayClient` | Complete |
-| `createGatewayMiddleware` | `create_gateway_middleware` | Complete |
-| `BatchEvmScheme` | `x402.create_payment_payload` | Complete |
-| `BatchFacilitatorClient` | `server.GatewayMiddleware` | Complete |
-| `supportsBatching` | `is_batch_payment` | Complete |
-| `getVerifyingContract` | `get_verifying_contract` | Complete |
-| `CHAIN_CONFIGS` | `CHAIN_CONFIGS` | Complete |
-
-## Development
-
-```bash
-# Install dev dependencies
-pip install -e ".[dev]"
-
-# Run tests
-pytest -v
-
-# Format code
-black circlekit tests
-isort circlekit tests
+├── __init__.py            # Package exports
+├── constants.py           # Chain configs, gateway addresses, protocol constants
+├── signer.py              # Signer protocol + PrivateKeySigner (EIP-712)
+├── tx_executor.py         # TxExecutor protocol + BoaTxExecutor (onchain txs)
+├── facilitator.py         # BatchFacilitatorClient (Gateway API verify/settle)
+├── boa_utils.py           # titanoboa helpers, contract ABIs, transactions
+├── x402.py                # x402 protocol (parse 402, create signatures, headers)
+├── x402_integration.py    # Optional x402 package integration
+├── client.py              # GatewayClient (pay, deposit, withdraw, balances)
+└── server.py              # Framework-agnostic payment middleware
 ```
 
 ## License

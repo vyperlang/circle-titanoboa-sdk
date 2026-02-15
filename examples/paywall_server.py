@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """
-Paywall Server Example - Python equivalent of examples/agent-marketplace/server.ts
-
-This demonstrates how to create an API with x402 paywalls using circlekit.
+Paywall Server Example - FastAPI adapter for circlekit's framework-agnostic middleware.
 
 Usage:
     export SELLER_ADDRESS=0x...
+    pip install fastapi uvicorn
     python paywall_server.py
 
 Endpoints:
@@ -18,60 +17,27 @@ Endpoints:
 import os
 import sys
 from datetime import datetime
-from flask import Flask, request, jsonify
+from functools import wraps
 
-# Add parent directory to path for circlekit import
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+import uvicorn
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from circlekit import create_gateway_middleware
-
-
-# ============================================================================
-# CONFIGURATION
-# ============================================================================
+from circlekit.x402 import PaymentInfo
 
 PORT = int(os.environ.get("PORT", 4022))
 SELLER_ADDRESS = os.environ.get("SELLER_ADDRESS")
 
 if not SELLER_ADDRESS:
     print("Error: SELLER_ADDRESS environment variable is required")
-    print("Usage: SELLER_ADDRESS=0x... python paywall_server.py")
     sys.exit(1)
 
 
-# ============================================================================
-# AGENT METADATA (ERC-8004 style)
-# ============================================================================
+app = FastAPI()
 
-AGENT_METADATA = {
-    "agentId": 1,
-    "name": "PythonAnalyzer-v1",
-    "description": "Python AI agent specializing in data analysis (circlekit demo)",
-    "owner": SELLER_ADDRESS,
-    "tokenURI": "ipfs://QmPythonAgentMetadata...",
-    "registeredAt": datetime.now().isoformat(),
-    "capabilities": ["data-analysis", "content-generation", "python-execution"],
-    "serviceEndpoints": {
-        "info": "/",
-        "analyze": "/api/analyze",
-        "generate": "/api/generate",
-    },
-    "pricing": {
-        "analyze": "$0.01",
-        "generate": "$0.05",
-    },
-    "x402Support": True,
-    "gatewayNetworks": ["eip155:5042002"],  # Arc Testnet
-}
-
-
-# ============================================================================
-# FLASK APP
-# ============================================================================
-
-app = Flask(__name__)
-
-# Create Gateway middleware
 gateway = create_gateway_middleware(
     seller_address=SELLER_ADDRESS,
     chain="arcTestnet",
@@ -79,143 +45,82 @@ gateway = create_gateway_middleware(
 )
 
 
-# ============================================================================
-# FREE ENDPOINTS
-# ============================================================================
+def require_payment(price):
+    """FastAPI adapter: wraps gateway.process_request into a decorator."""
 
-@app.route("/")
-def agent_info():
-    """Agent Discovery (free) - Returns ERC-8004 style metadata."""
-    return jsonify({
-        "success": True,
-        "agent": AGENT_METADATA,
-        "message": "Use x402 payments to access /api/analyze and /api/generate",
-        "sdk": "circlekit-py",
-    })
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(request: Request, *args, **kwargs):
+            result = await gateway.process_request(
+                payment_header=request.headers.get("Payment-Signature"),
+                path=request.url.path,
+                price=price,
+            )
+            if isinstance(result, dict):
+                resp = JSONResponse(result["body"], status_code=result["status"])
+                for k, v in result.get("headers", {}).items():
+                    resp.headers[k] = v
+                return resp
+            kwargs["payment"] = result
+            response = await func(request, *args, **kwargs)
+            # Attach PAYMENT-RESPONSE header if present
+            if hasattr(result, "response_headers") and result.response_headers:
+                for k, v in result.response_headers.items():
+                    response.headers[k] = v
+            return response
 
+        return wrapper
 
-@app.route("/health")
-def health_check():
-    """Health check (free)."""
-    return jsonify({
-        "status": "ok",
-        "agent": AGENT_METADATA["name"],
-        "seller": SELLER_ADDRESS,
-        "sdk": "circlekit-py",
-    })
-
-
-# ============================================================================
-# PAID ENDPOINTS (x402 paywall)
-# ============================================================================
-
-@app.route("/api/analyze")
-@gateway.require("$0.01")
-def analyze(payment):
-    """
-    Data Analysis ($0.01)
-    
-    Protected by gateway.require('$0.01')
-    - Without payment: Returns 402 Payment Required
-    - With payment: Verifies, settles, and returns analysis
-    """
-    print(f"[PAYMENT] Analyze request paid by {payment.payer}")
-    print(f"          Amount: {payment.amount}")
-    print(f"          Network: {payment.network}")
-    
-    return jsonify({
-        "success": True,
-        "service": "analyze",
-        "result": {
-            "summary": "Python analysis complete. Key findings indicate positive trends.",
-            "confidence": 0.92,
-            "dataPoints": 128,
-            "insights": [
-                "Trend A shows 18% growth (Python model)",
-                "Pattern B correlates with external factor C",
-                "Anomaly detected in sector D using numpy",
-            ],
-        },
-        "payment": {
-            "amount": payment.amount,
-            "payer": payment.payer,
-            "network": payment.network,
-            "transaction": payment.transaction,
-        },
-        "reputationHint": {
-            "message": "Submit feedback with this transaction hash as proofOfPayment",
-            "proofOfPayment": payment.transaction,
-        },
-    })
+    return decorator
 
 
-@app.route("/api/generate", methods=["POST"])
-@gateway.require("$0.05")
-def generate(payment):
-    """
-    Content Generation ($0.05)
-    
-    Accepts a prompt in the request body and generates content.
-    """
-    data = request.get_json() or {}
+@app.get("/")
+async def agent_info():
+    return {"success": True, "message": "Use x402 payments to access /api/analyze"}
+
+
+@app.get("/health")
+async def health_check():
+    return {"status": "ok", "seller": SELLER_ADDRESS, "sdk": "circlekit-py"}
+
+
+@app.get("/api/analyze")
+@require_payment("$0.01")
+async def analyze(request: Request, payment: PaymentInfo = None):
+    return JSONResponse(
+        {
+            "success": True,
+            "result": {"summary": "Analysis complete.", "confidence": 0.92},
+            "payment": {
+                "amount": payment.amount,
+                "payer": payment.payer,
+                "transaction": payment.transaction,
+            },
+        }
+    )
+
+
+@app.post("/api/generate")
+@require_payment("$0.05")
+async def generate(request: Request, payment: PaymentInfo = None):
+    data = await request.json()
     prompt = data.get("prompt", "default prompt")
-    style = data.get("style", "professional")
-    
-    print(f"[PAYMENT] Generate request paid by {payment.payer}")
-    print(f"          Prompt: \"{prompt[:50]}...\"")
-    print(f"          Amount: {payment.amount}")
-    
-    return jsonify({
-        "success": True,
-        "service": "generate",
-        "input": {"prompt": prompt, "style": style},
-        "result": {
-            "content": f"Generated {style} content based on: \"{prompt}\" (Python/circlekit)",
-            "wordCount": 175,
-            "generatedAt": datetime.now().isoformat(),
-            "model": "python-gpt-local",
-        },
-        "payment": {
-            "amount": payment.amount,
-            "payer": payment.payer,
-            "network": payment.network,
-            "transaction": payment.transaction,
-        },
-    })
+    return JSONResponse(
+        {
+            "success": True,
+            "result": {
+                "content": f"Generated content for: {prompt}",
+                "generatedAt": datetime.now().isoformat(),
+            },
+            "payment": {
+                "amount": payment.amount,
+                "payer": payment.payer,
+                "transaction": payment.transaction,
+            },
+        }
+    )
 
-
-# ============================================================================
-# MAIN
-# ============================================================================
 
 if __name__ == "__main__":
-    print(f"""
-╔════════════════════════════════════════════════════════════════╗
-║        Agent Marketplace - Python x402 Seller (circlekit)      ║
-╚════════════════════════════════════════════════════════════════╝
-
-Server:    http://localhost:{PORT}
-Agent:     {AGENT_METADATA["name"]}
-Seller:    {SELLER_ADDRESS}
-SDK:       circlekit-py (Python)
-
-Endpoints:
-  GET  /              - Agent info (free)
-  GET  /health        - Health check (free)
-  GET  /api/analyze   - Data analysis ($0.01)
-  POST /api/generate  - Content generation ($0.05)
-
-Test free endpoints:
-  curl http://localhost:{PORT}/
-  curl http://localhost:{PORT}/health
-
-Test paywalled endpoints (returns 402):
-  curl http://localhost:{PORT}/api/analyze
-
-To pay, run agent_client.py in another terminal:
-  PRIVATE_KEY=0x... python agent_client.py
-
-Get testnet USDC from: https://faucet.circle.com
-""")
-    
-    app.run(host="0.0.0.0", port=PORT, debug=True)
+    print(f"Server: http://localhost:{PORT} | Seller: {SELLER_ADDRESS}")
+    uvicorn.run(app, host="0.0.0.0", port=PORT)
