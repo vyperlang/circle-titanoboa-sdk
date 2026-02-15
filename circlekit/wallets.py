@@ -386,12 +386,22 @@ class CircleTxExecutor:
     def execute_initiate_withdrawal(
         self, chain: str, owner: str, amount: int, rpc_url: str | None = None
     ) -> str:
-        raise NotImplementedError("Trustless withdrawals via Circle wallets are not yet supported")
+        config = get_chain_config(chain)
+        return self._submit_and_wait(
+            contract_address=config.gateway_address,
+            abi_function_signature="initiateWithdrawal(address,uint256)",
+            abi_parameters=[config.usdc_address, str(amount)],
+        )
 
     def execute_complete_withdrawal(
         self, chain: str, owner: str, rpc_url: str | None = None
     ) -> str:
-        raise NotImplementedError("Trustless withdrawals via Circle wallets are not yet supported")
+        config = get_chain_config(chain)
+        return self._submit_and_wait(
+            contract_address=config.gateway_address,
+            abi_function_signature="withdraw(address)",
+            abi_parameters=[config.usdc_address],
+        )
 
     def check_allowance(
         self, chain: str, owner: str, spender: str, rpc_url: str | None = None

@@ -788,15 +788,39 @@ class TestCircleTxExecutorMethods:
         assert req.abi_parameters[0].actual_instance == "0xabcd"
         assert req.abi_parameters[1].actual_instance == "0x1234"
 
-    def test_execute_initiate_withdrawal_not_implemented(self, circle_mocks):
-        executor = _make_executor(circle_mocks)
-        with pytest.raises(NotImplementedError, match="Trustless withdrawals"):
-            executor.execute_initiate_withdrawal("arcTestnet", FAKE_ADDRESS, 1_000_000)
+    def test_execute_initiate_withdrawal(self, circle_mocks):
+        from circlekit.constants import get_chain_config
 
-    def test_execute_complete_withdrawal_not_implemented(self, circle_mocks):
         executor = _make_executor(circle_mocks)
-        with pytest.raises(NotImplementedError, match="Trustless withdrawals"):
-            executor.execute_complete_withdrawal("arcTestnet", FAKE_ADDRESS)
+        mock_tx = circle_mocks["transactions_api"]
+        _mock_submit_response(mock_tx)
+        _mock_poll_response(mock_tx, "CONFIRMED")
+
+        config = get_chain_config("arcTestnet")
+        amount = 1_000_000
+        executor.execute_initiate_withdrawal("arcTestnet", FAKE_ADDRESS, amount)
+
+        req = mock_tx.create_developer_transaction_contract_execution.call_args.args[0]
+        assert req.contract_address == config.gateway_address
+        assert req.abi_function_signature == "initiateWithdrawal(address,uint256)"
+        assert req.abi_parameters[0].actual_instance == config.usdc_address
+        assert req.abi_parameters[1].actual_instance == str(amount)
+
+    def test_execute_complete_withdrawal(self, circle_mocks):
+        from circlekit.constants import get_chain_config
+
+        executor = _make_executor(circle_mocks)
+        mock_tx = circle_mocks["transactions_api"]
+        _mock_submit_response(mock_tx)
+        _mock_poll_response(mock_tx, "CONFIRMED")
+
+        config = get_chain_config("arcTestnet")
+        executor.execute_complete_withdrawal("arcTestnet", FAKE_ADDRESS)
+
+        req = mock_tx.create_developer_transaction_contract_execution.call_args.args[0]
+        assert req.contract_address == config.gateway_address
+        assert req.abi_function_signature == "withdraw(address)"
+        assert req.abi_parameters[0].actual_instance == config.usdc_address
 
     def test_execute_approve_uses_usdc_address(self, circle_mocks):
         """execute_approve targets the USDC contract, not the gateway."""
