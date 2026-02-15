@@ -103,8 +103,19 @@ __all__ = [
     "register_batch_scheme",
 ]
 
-# CircleWalletSigner is always importable but raises ImportError at construction
-# time if circle-developer-controlled-wallets is not installed.
-from circlekit.wallets import CircleWalletSigner  # noqa: F811
+# Circle Developer-Controlled Wallets adapters are always importable but raise
+# ImportError at construction time if circle-developer-controlled-wallets is
+# not installed.
+from circlekit.wallets import (  # noqa: F811
+    CircleTransactionError,
+    CircleTransactionTimeoutError,
+    CircleTxExecutor,
+    CircleWalletSigner,
+)
 
-__all__ += ["CircleWalletSigner"]
+__all__ += [
+    "CircleWalletSigner",
+    "CircleTxExecutor",
+    "CircleTransactionError",
+    "CircleTransactionTimeoutError",
+]
