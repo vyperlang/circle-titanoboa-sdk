@@ -102,3 +102,9 @@ __all__ = [
     "create_resource_server",
     "register_batch_scheme",
 ]
+
+# CircleWalletSigner is always importable but raises ImportError at construction
+# time if circle-developer-controlled-wallets is not installed.
+from circlekit.wallets import CircleWalletSigner  # noqa: F811
+
+__all__ += ["CircleWalletSigner"]
