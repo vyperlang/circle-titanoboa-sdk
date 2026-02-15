@@ -49,6 +49,7 @@ from circlekit.facilitator import BatchFacilitatorClient
 from circlekit.key_utils import PrivateKeyLike, normalize_private_key
 from circlekit.server import create_gateway_middleware
 from circlekit.signer import PrivateKeySigner, Signer
+from circlekit.sync_client import GatewayClientSync
 from circlekit.tx_executor import BoaTxExecutor, TxExecutor
 from circlekit.x402 import (
     BatchEvmScheme,
@@ -67,6 +68,7 @@ from circlekit.x402_integration import create_resource_server, register_batch_sc
 __all__ = [
     # Client
     "GatewayClient",
+    "GatewayClientSync",
     "TrustlessWithdrawalResult",
     # Server
     "create_gateway_middleware",
