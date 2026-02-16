@@ -928,6 +928,8 @@ class GatewayClient:
             raise ValueError("deposit_for() requires a tx_executor or private_key")
 
         amount_raw = parse_usdc(amount)
+        if amount_raw <= 0:
+            raise ValueError(f"Amount must be positive, got: {amount}")
         approve_raw = parse_usdc(approve_amount) if approve_amount else amount_raw
 
         # Preflight: check wallet USDC balance
