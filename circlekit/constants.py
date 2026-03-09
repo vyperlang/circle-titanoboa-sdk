@@ -3,6 +3,7 @@ Constants for x402 batching via Circle Gateway.
 """
 
 from dataclasses import dataclass
+from typing import Literal
 
 # Protocol constants
 CIRCLE_BATCHING_NAME = "GatewayWalletBatched"
@@ -135,6 +136,50 @@ CHAIN_CONFIGS: dict[str, ChainConfig] = {
         explorer_url="https://seistream.app",
         is_testnet=True,
     ),
+    "arbitrumSepolia": ChainConfig(
+        chain_id=421614,
+        name="Arbitrum Sepolia",
+        rpc_url="https://sepolia-rollup.arbitrum.io/rpc",
+        usdc_address="0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d",
+        gateway_address=TESTNET_GATEWAY_WALLET,
+        gateway_minter=TESTNET_GATEWAY_MINTER,
+        gateway_domain=3,
+        explorer_url="https://sepolia.arbiscan.io",
+        is_testnet=True,
+    ),
+    "optimismSepolia": ChainConfig(
+        chain_id=11155420,
+        name="Optimism Sepolia",
+        rpc_url="https://sepolia.optimism.io",
+        usdc_address="0x5fd84259d66Cd46123540766Be93DFE6D43130D7",
+        gateway_address=TESTNET_GATEWAY_WALLET,
+        gateway_minter=TESTNET_GATEWAY_MINTER,
+        gateway_domain=2,
+        explorer_url="https://sepolia-optimism.etherscan.io",
+        is_testnet=True,
+    ),
+    "polygonAmoy": ChainConfig(
+        chain_id=80002,
+        name="Polygon Amoy",
+        rpc_url="https://rpc-amoy.polygon.technology",
+        usdc_address="0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582",
+        gateway_address=TESTNET_GATEWAY_WALLET,
+        gateway_minter=TESTNET_GATEWAY_MINTER,
+        gateway_domain=7,
+        explorer_url="https://amoy.polygonscan.com",
+        is_testnet=True,
+    ),
+    "unichainSepolia": ChainConfig(
+        chain_id=1301,
+        name="Unichain Sepolia",
+        rpc_url="https://sepolia.unichain.org",
+        usdc_address="0x31d0220469e10c4E71834a79b1f276d740d3768F",
+        gateway_address=TESTNET_GATEWAY_WALLET,
+        gateway_minter=TESTNET_GATEWAY_MINTER,
+        gateway_domain=10,
+        explorer_url="https://sepolia.uniscan.xyz",
+        is_testnet=True,
+    ),
     # ============ MAINNETS ============
     "ethereum": ChainConfig(
         chain_id=1,
@@ -259,6 +304,32 @@ CHAIN_CONFIGS: dict[str, ChainConfig] = {
     ),
 }
 
+
+SupportedChainName = Literal[
+    "arcTestnet",
+    "baseSepolia",
+    "ethereumSepolia",
+    "avalancheFuji",
+    "hyperEvmTestnet",
+    "sonicTestnet",
+    "worldChainSepolia",
+    "seiAtlantic",
+    "arbitrumSepolia",
+    "optimismSepolia",
+    "polygonAmoy",
+    "unichainSepolia",
+    "ethereum",
+    "base",
+    "arbitrum",
+    "polygon",
+    "optimism",
+    "avalanche",
+    "sonic",
+    "unichain",
+    "worldChain",
+    "hyperEvm",
+    "sei",
+]
 
 # Chain name aliases
 CHAIN_ALIASES: dict[str, str] = {

@@ -50,6 +50,10 @@ class TestConstants:
             "sonicTestnet": 13,
             "worldChainSepolia": 14,
             "seiAtlantic": 16,
+            "arbitrumSepolia": 3,
+            "optimismSepolia": 2,
+            "polygonAmoy": 7,
+            "unichainSepolia": 10,
             "ethereum": 0,
             "base": 6,
             "arbitrum": 3,
@@ -125,6 +129,47 @@ class TestConstants:
         assert CIRCLE_BATCHING_SCHEME == "exact"
         assert X402_VERSION == 2
         assert USDC_DECIMALS == 6
+
+    def test_new_testnet_chains_by_name(self):
+        from circlekit.constants import CHAIN_CONFIGS
+
+        new_chains = {
+            "arbitrumSepolia": (421614, "Arbitrum Sepolia"),
+            "optimismSepolia": (11155420, "Optimism Sepolia"),
+            "polygonAmoy": (80002, "Polygon Amoy"),
+            "unichainSepolia": (1301, "Unichain Sepolia"),
+        }
+        for chain_name, (chain_id, name) in new_chains.items():
+            assert chain_name in CHAIN_CONFIGS, f"{chain_name} not in CHAIN_CONFIGS"
+            config = CHAIN_CONFIGS[chain_name]
+            assert config.chain_id == chain_id
+            assert config.name == name
+            assert config.is_testnet is True
+
+    def test_new_testnet_chains_by_id(self):
+        from circlekit.constants import get_chain_by_id
+
+        expected = {
+            421614: "Arbitrum Sepolia",
+            11155420: "Optimism Sepolia",
+            80002: "Polygon Amoy",
+            1301: "Unichain Sepolia",
+        }
+        for chain_id, name in expected.items():
+            config = get_chain_by_id(chain_id)
+            assert config is not None, f"get_chain_by_id({chain_id}) returned None"
+            assert config.name == name
+
+    def test_supported_chain_name_includes_new_chains(self):
+        from typing import get_args
+
+        from circlekit.constants import CHAIN_CONFIGS, SupportedChainName
+
+        supported = get_args(SupportedChainName)
+        for chain_name in ["arbitrumSepolia", "optimismSepolia", "polygonAmoy", "unichainSepolia"]:
+            assert chain_name in supported, f"{chain_name} not in SupportedChainName"
+        for chain_name in CHAIN_CONFIGS:
+            assert chain_name in supported, f"{chain_name} in CHAIN_CONFIGS but not in SupportedChainName"
 
     def test_usdc_constants_removed(self):
         """USDC_TOKEN_NAME, USDC_TOKEN_VERSION, EIP712_DOMAIN_TYPE should no longer exist."""

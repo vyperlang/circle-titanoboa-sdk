@@ -53,6 +53,7 @@ from circlekit.constants import (
     CIRCLE_BATCHING_NAME,
     CIRCLE_BATCHING_SCHEME,
     CIRCLE_BATCHING_VERSION,
+    SupportedChainName,
     get_chain_config,
 )
 from circlekit.facilitator import BatchFacilitatorClient
@@ -113,6 +114,7 @@ __all__ = [
     "get_chain_config",
     "get_rpc_url",
     "CHAIN_CONFIGS",
+    "SupportedChainName",
     # USDC formatting
     "format_usdc",
     "parse_usdc",
