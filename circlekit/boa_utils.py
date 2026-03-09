@@ -22,6 +22,17 @@ from circlekit.constants import USDC_DECIMALS, get_chain_config
 from circlekit.key_utils import normalize_private_key
 
 
+def _extract_tx_hash(tx: Any) -> str:
+    try:
+        if hasattr(boa.env, "last_tx") and boa.env.last_tx:
+            return (
+                boa.env.last_tx.hex() if hasattr(boa.env.last_tx, "hex") else str(boa.env.last_tx)
+            )
+        return str(tx) if tx else ""
+    except Exception:
+        return str(tx) if tx else ""
+
+
 def get_rpc_url(chain: str) -> str:
     """Get the RPC URL for a chain."""
     return get_chain_config(chain).rpc_url
@@ -344,14 +355,7 @@ def execute_approve(
 
     tx = usdc.approve(spender, amount)
 
-    try:
-        if hasattr(boa.env, "last_tx") and boa.env.last_tx:
-            return (
-                boa.env.last_tx.hex() if hasattr(boa.env.last_tx, "hex") else str(boa.env.last_tx)
-            )
-        return str(tx) if tx else ""
-    except Exception:
-        return str(tx) if tx else ""
+    return _extract_tx_hash(tx)
 
 
 def execute_deposit(
@@ -393,14 +397,7 @@ def execute_deposit(
             return ""
         raise
 
-    try:
-        if hasattr(boa.env, "last_tx") and boa.env.last_tx:
-            return (
-                boa.env.last_tx.hex() if hasattr(boa.env.last_tx, "hex") else str(boa.env.last_tx)
-            )
-        return str(tx) if tx else ""
-    except Exception:
-        return str(tx) if tx else ""
+    return _extract_tx_hash(tx)
 
 
 def execute_gateway_mint(
@@ -431,14 +428,7 @@ def execute_gateway_mint(
 
     tx = minter.gatewayMint(attestation, signature)
 
-    try:
-        if hasattr(boa.env, "last_tx") and boa.env.last_tx:
-            return (
-                boa.env.last_tx.hex() if hasattr(boa.env.last_tx, "hex") else str(boa.env.last_tx)
-            )
-        return str(tx) if tx else ""
-    except Exception:
-        return str(tx) if tx else ""
+    return _extract_tx_hash(tx)
 
 
 def check_allowance(
@@ -542,14 +532,7 @@ def execute_initiate_withdrawal(
 
     tx = gateway.initiateWithdrawal(config.usdc_address, amount)
 
-    try:
-        if hasattr(boa.env, "last_tx") and boa.env.last_tx:
-            return (
-                boa.env.last_tx.hex() if hasattr(boa.env.last_tx, "hex") else str(boa.env.last_tx)
-            )
-        return str(tx) if tx else ""
-    except Exception:
-        return str(tx) if tx else ""
+    return _extract_tx_hash(tx)
 
 
 def execute_complete_withdrawal(
@@ -576,14 +559,7 @@ def execute_complete_withdrawal(
 
     tx = gateway.withdraw(config.usdc_address)
 
-    try:
-        if hasattr(boa.env, "last_tx") and boa.env.last_tx:
-            return (
-                boa.env.last_tx.hex() if hasattr(boa.env.last_tx, "hex") else str(boa.env.last_tx)
-            )
-        return str(tx) if tx else ""
-    except Exception:
-        return str(tx) if tx else ""
+    return _extract_tx_hash(tx)
 
 
 def execute_deposit_for(
@@ -614,14 +590,7 @@ def execute_deposit_for(
 
     tx = gateway.depositFor(config.usdc_address, depositor, amount)
 
-    try:
-        if hasattr(boa.env, "last_tx") and boa.env.last_tx:
-            return (
-                boa.env.last_tx.hex() if hasattr(boa.env.last_tx, "hex") else str(boa.env.last_tx)
-            )
-        return str(tx) if tx else ""
-    except Exception:
-        return str(tx) if tx else ""
+    return _extract_tx_hash(tx)
 
 
 def get_usdc_balance(
