@@ -170,6 +170,10 @@ class TestConstants:
             assert chain_name in supported, f"{chain_name} not in SupportedChainName"
         for chain_name in CHAIN_CONFIGS:
             assert chain_name in supported, f"{chain_name} in CHAIN_CONFIGS but not in SupportedChainName"
+        from circlekit.constants import CHAIN_ALIASES
+
+        for alias in CHAIN_ALIASES:
+            assert alias in supported, f"alias '{alias}' not in SupportedChainName"
 
     def test_usdc_constants_removed(self):
         """USDC_TOKEN_NAME, USDC_TOKEN_VERSION, EIP712_DOMAIN_TYPE should no longer exist."""

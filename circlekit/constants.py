@@ -329,6 +329,8 @@ SupportedChainName = Literal[
     "worldChain",
     "hyperEvm",
     "sei",
+    "sepolia",
+    "mainnet",
 ]
 
 # Chain name aliases
