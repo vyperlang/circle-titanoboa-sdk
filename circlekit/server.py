@@ -55,6 +55,7 @@ class GatewayMiddlewareConfig:
     networks: list[str] = field(default_factory=list)
     description: str = "Paid resource"
     chain: str = "arcTestnet"
+    facilitator_url: str | None = None
 
 
 class GatewayMiddleware:
@@ -69,7 +70,8 @@ class GatewayMiddleware:
         self._config = config
         self._chain_config = CHAIN_CONFIGS.get(config.chain, CHAIN_CONFIGS["arcTestnet"])
         self._gateway_api = get_gateway_api_url(self._chain_config.is_testnet)
-        self._facilitator = BatchFacilitatorClient(url=self._gateway_api)
+        facilitator_url = config.facilitator_url or self._gateway_api
+        self._facilitator = BatchFacilitatorClient(url=facilitator_url)
 
         # Build accepted chains map: "eip155:{chain_id}" -> ChainConfig
         # If config.networks is non-empty, resolve each to ChainConfig;
@@ -358,6 +360,8 @@ def create_gateway_middleware(
     networks: list[str] | None = None,
     description: str = "Paid resource",
     chain: str = "arcTestnet",
+    *,
+    facilitator_url: str | None = None,
 ) -> GatewayMiddleware:
     """
     Create middleware for accepting Gateway payments.
@@ -367,6 +371,7 @@ def create_gateway_middleware(
         networks: List of networks to accept (default: just the primary chain)
         description: Resource description for 402 responses
         chain: Primary chain for configuration
+        facilitator_url: Custom facilitator URL (default: Circle Gateway API)
 
     Returns:
         GatewayMiddleware instance
@@ -389,5 +394,6 @@ def create_gateway_middleware(
         networks=networks or [],
         description=description,
         chain=chain,
+        facilitator_url=facilitator_url,
     )
     return GatewayMiddleware(config)

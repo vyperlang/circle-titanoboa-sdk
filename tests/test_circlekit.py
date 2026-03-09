@@ -2499,6 +2499,42 @@ class TestGatewayMiddleware:
                     price="$0.01",
                 )
 
+    def test_no_facilitator_url_uses_default(self):
+        from circlekit.constants import get_gateway_api_url
+        from circlekit.server import create_gateway_middleware
+
+        middleware = create_gateway_middleware(
+            seller_address="0x1234567890123456789012345678901234567890",
+            chain="arcTestnet",
+        )
+        expected_url = get_gateway_api_url(is_testnet=True)
+        assert middleware._facilitator._url == expected_url
+
+    def test_facilitator_url_routes_to_custom(self):
+        from circlekit.server import create_gateway_middleware
+
+        middleware = create_gateway_middleware(
+            seller_address="0x1234567890123456789012345678901234567890",
+            chain="arcTestnet",
+            facilitator_url="http://localhost:9000",
+        )
+        assert middleware._facilitator._url == "http://localhost:9000"
+
+    def test_positional_callers_still_work(self):
+        from circlekit.server import create_gateway_middleware
+
+        middleware = create_gateway_middleware(
+            "0x1234567890123456789012345678901234567890",
+            ["arcTestnet", "baseSepolia"],
+            "My resource",
+            "baseSepolia",
+        )
+        assert middleware._config.seller_address == "0x1234567890123456789012345678901234567890"
+        assert middleware._config.networks == ["arcTestnet", "baseSepolia"]
+        assert middleware._config.description == "My resource"
+        assert middleware._config.chain == "baseSepolia"
+        assert middleware._config.facilitator_url is None
+
 
 # ============================================================================
 # TEST: boa_utils.py transaction helpers
