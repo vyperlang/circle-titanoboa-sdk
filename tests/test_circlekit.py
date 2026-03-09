@@ -2535,6 +2535,58 @@ class TestGatewayMiddleware:
         assert middleware._config.chain == "baseSepolia"
         assert middleware._config.facilitator_url is None
 
+    @pytest.mark.asyncio
+    async def test_payment_signature_header_case_insensitive(self):
+        import json
+
+        from circlekit.facilitator import SettleResponse, VerifyResponse
+        from circlekit.server import create_gateway_middleware
+        from circlekit.x402 import PAYMENT_SIGNATURE_HEADER
+
+        assert PAYMENT_SIGNATURE_HEADER == "Payment-Signature"
+
+        fake_payload = base64.b64encode(
+            json.dumps(
+                {
+                    "payload": {
+                        "authorization": {"from": "0xabc", "value": "10000"},
+                        "signature": "0x123",
+                    },
+                    "accepted": {},
+                }
+            ).encode()
+        ).decode()
+
+        import httpx
+
+        for casing in ["payment-signature", "PAYMENT-SIGNATURE", "Payment-Signature"]:
+            headers = httpx.Headers({casing: fake_payload})
+            value = headers.get(PAYMENT_SIGNATURE_HEADER)
+            assert value == fake_payload, f"Header lookup failed for casing '{casing}'"
+
+            middleware = create_gateway_middleware(
+                seller_address="0x1234567890123456789012345678901234567890",
+            )
+            with (
+                patch.object(
+                    middleware._facilitator, "verify", new_callable=AsyncMock
+                ) as mock_verify,
+                patch.object(
+                    middleware._facilitator, "settle", new_callable=AsyncMock
+                ) as mock_settle,
+            ):
+                mock_verify.return_value = VerifyResponse(is_valid=True)
+                mock_settle.return_value = SettleResponse(
+                    success=True, transaction="0xtx"
+                )
+                result = await middleware.process_request(
+                    payment_header=value,
+                    path="/api/test",
+                    price="$0.01",
+                )
+                assert not isinstance(result, dict), f"Failed for casing '{casing}'"
+                assert result.verified is True
+
 
 # ============================================================================
 # TEST: boa_utils.py transaction helpers

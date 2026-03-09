@@ -9,7 +9,7 @@ Usage:
 
     # In any framework:
     result = await gateway.process_request(
-        payment_header=request.headers.get("PAYMENT-SIGNATURE"),
+        payment_header=request.headers.get(PAYMENT_SIGNATURE_HEADER),
         path="/api/analyze",
         price="$0.01",
     )
@@ -40,6 +40,7 @@ from circlekit.facilitator import BatchFacilitatorClient, SettleResponse, Verify
 from circlekit.x402 import (
     PAYMENT_REQUIRED_HEADER,
     PAYMENT_RESPONSE_HEADER,
+    PAYMENT_SIGNATURE_HEADER,
     PaymentInfo,
     decode_payment_header,
     encode_payment_required,
@@ -384,7 +385,7 @@ def create_gateway_middleware(
 
         # In your framework handler:
         result = await gateway.process_request(
-            payment_header=request.headers.get("Payment-Signature"),
+            payment_header=request.headers.get(PAYMENT_SIGNATURE_HEADER),
             path=request.path,
             price="$0.01",
         )
