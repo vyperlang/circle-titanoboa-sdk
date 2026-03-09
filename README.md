@@ -426,7 +426,7 @@ setup_boa_with_account("arcTestnet", "0xPrivateKey...")
 | Ethereum Sepolia | 11155111 | 0 | Testnet |
 | Avalanche Fuji | 43113 | 1 | Testnet |
 | HyperEVM Testnet | 998 | 19 | Testnet |
-| Sonic Testnet | 64165 | 13 | Testnet |
+| Sonic Testnet | 14601 | 13 | Testnet |
 | World Chain Sepolia | 4801 | 14 | Testnet |
 | Sei Atlantic Testnet | 1328 | 16 | Testnet |
 | Ethereum | 1 | 0 | Mainnet |
