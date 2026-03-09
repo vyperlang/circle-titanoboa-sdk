@@ -441,6 +441,8 @@ setup_boa_with_account("arcTestnet", "0xPrivateKey...")
 | HyperEVM | 999 | 19 | Mainnet |
 | Sei | 1329 | 16 | Mainnet |
 
+USDC contract addresses sourced from https://developers.circle.com/stablecoins/usdc-contract-addresses
+
 **Note:** Arc Testnet uses USDC as the native gas token. Gateway Domain IDs are Circle's internal domain identifiers, not chain IDs.
 
 ## Known Limitations
