@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="titanoboa-logo.png" width="200" alt="Titanoboa logo">
+</p>
+
 # circle-titanoboa-sdk
 
 Python SDK for [x402](https://github.com/coinbase/x402) with Circle Gateway batching. Uses **titanoboa** for on-chain interactions.
@@ -493,7 +497,7 @@ circlekit/
 
 ## License
 
-MIT — see [LICENSE](./LICENSE)
+MIT - see [LICENSE](./LICENSE)
 
 ---
 
