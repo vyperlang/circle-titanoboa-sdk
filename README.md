@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="titanoboa-logo.png" width="200" alt="Titanoboa logo">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="titanoboa-logo-dark.png">
+    <img src="titanoboa-logo.png" width="200" alt="Titanoboa logo">
+  </picture>
 </p>
 
 # circle-titanoboa-sdk
