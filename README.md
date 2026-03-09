@@ -493,4 +493,8 @@ circlekit/
 
 ## License
 
-MIT
+MIT — see [LICENSE](./LICENSE)
+
+---
+
+*This is an unaudited reference implementation provided for educational and development purposes only. It is not production-ready software. Use at your own risk. The authors accept no liability for any losses or damages arising from its use or deployment.*
