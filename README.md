@@ -123,6 +123,8 @@ If you already use the [`x402` Python package](https://github.com/coinbase/x402/
 pip install ".[x402]"
 ```
 
+The x402 package API may change independently of circlekit. See https://github.com/x402/x402 for the latest usage.
+
 ```python
 from circlekit.x402_integration import create_resource_server
 
