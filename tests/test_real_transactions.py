@@ -155,7 +155,6 @@ class TestArcTestnetApproval:
         ⚠️  This test executes a real approval transaction!
         """
         from circlekit.boa_utils import (
-            check_allowance,
             execute_approve,
             get_account_from_private_key,
             get_chain_config,

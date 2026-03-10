@@ -34,10 +34,16 @@ import httpx
 
 from circlekit.boa_utils import (
     format_usdc,
-    get_block_number as _boa_get_block_number,
-    get_withdrawal_block as _boa_get_withdrawal_block,
-    get_withdrawal_delay as _boa_get_withdrawal_delay,
     parse_usdc,
+)
+from circlekit.boa_utils import (
+    get_block_number as _boa_get_block_number,
+)
+from circlekit.boa_utils import (
+    get_withdrawal_block as _boa_get_withdrawal_block,
+)
+from circlekit.boa_utils import (
+    get_withdrawal_delay as _boa_get_withdrawal_delay,
 )
 from circlekit.constants import (
     ChainConfig,
