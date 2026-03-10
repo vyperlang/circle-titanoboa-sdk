@@ -429,6 +429,10 @@ setup_boa_with_account("arcTestnet", "0xPrivateKey...")
 | Sonic Testnet | 14601 | 13 | Testnet |
 | World Chain Sepolia | 4801 | 14 | Testnet |
 | Sei Atlantic Testnet | 1328 | 16 | Testnet |
+| Arbitrum Sepolia | 421614 | 3 | Testnet |
+| Optimism Sepolia | 11155420 | 2 | Testnet |
+| Polygon Amoy | 80002 | 7 | Testnet |
+| Unichain Sepolia | 1301 | 10 | Testnet |
 | Ethereum | 1 | 0 | Mainnet |
 | Base | 8453 | 6 | Mainnet |
 | Arbitrum | 42161 | 3 | Mainnet |
