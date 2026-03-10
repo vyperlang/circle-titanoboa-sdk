@@ -435,10 +435,10 @@ setup_boa_with_account("arcTestnet", "0xPrivateKey...")
 | Unichain Sepolia | 1301 | 10 | Testnet |
 | Ethereum | 1 | 0 | Mainnet |
 | Base | 8453 | 6 | Mainnet |
-| Arbitrum | 42161 | 3 | Mainnet |
+| Arbitrum One | 42161 | 3 | Mainnet |
 | Polygon | 137 | 7 | Mainnet |
 | Optimism | 10 | 2 | Mainnet |
-| Avalanche | 43114 | 1 | Mainnet |
+| Avalanche C-Chain | 43114 | 1 | Mainnet |
 | Sonic | 146 | 13 | Mainnet |
 | Unichain | 130 | 10 | Mainnet |
 | World Chain | 480 | 14 | Mainnet |
