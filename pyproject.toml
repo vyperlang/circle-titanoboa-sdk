@@ -28,6 +28,7 @@ dependencies = [
 [project.optional-dependencies]
 x402 = ["x402[httpx]>=2.0.0"]
 wallets = ["circle-developer-controlled-wallets>=9.0.0"]
+examples = ["fastapi>=0.100.0", "uvicorn>=0.20.0"]
 
 [project.urls]
 Homepage = "https://github.com/circle-hackathon/circle-titanoboa-sdk"

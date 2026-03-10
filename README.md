@@ -65,7 +65,8 @@ asyncio.run(main())
 
 ### Protect an Endpoint (Seller)
 
-The middleware is framework-agnostic. Here's an example with FastAPI:
+The middleware is framework-agnostic. Here's an example with FastAPI.
+To run the examples: `pip install circlekit[examples]`
 
 ```python
 from fastapi import FastAPI, Request
