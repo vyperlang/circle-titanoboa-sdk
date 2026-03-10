@@ -34,6 +34,7 @@ from circlekit.constants import (
     DEFAULT_MAX_TIMEOUT_SECONDS,
     X402_VERSION,
     ChainConfig,
+    get_chain_config,
     get_gateway_api_url,
 )
 from circlekit.facilitator import BatchFacilitatorClient, SettleResponse, VerifyResponse
@@ -68,7 +69,7 @@ class GatewayMiddleware:
 
     def __init__(self, config: GatewayMiddlewareConfig):
         self._config = config
-        self._chain_config = CHAIN_CONFIGS.get(config.chain, CHAIN_CONFIGS["arcTestnet"])
+        self._chain_config = get_chain_config(config.chain)
         self._gateway_api = get_gateway_api_url(self._chain_config.is_testnet)
         facilitator_url = config.facilitator_url or self._gateway_api
         self._facilitator = BatchFacilitatorClient(url=facilitator_url)

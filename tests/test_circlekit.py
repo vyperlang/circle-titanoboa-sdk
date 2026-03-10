@@ -2276,6 +2276,15 @@ class TestGatewayMiddleware:
                 networks=["nonexistentChain"],
             )
 
+    def test_invalid_chain_raises(self):
+        from circlekit.server import create_gateway_middleware
+
+        with pytest.raises(ValueError, match="Unsupported chain"):
+            create_gateway_middleware(
+                seller_address="0x1234567890123456789012345678901234567890",
+                chain="invalidChain",
+            )
+
     @pytest.mark.asyncio
     async def test_402_response_has_multiple_accepts_for_networks(self):
         """402 response should have one accepts entry per accepted network."""
