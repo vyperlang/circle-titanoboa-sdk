@@ -169,7 +169,9 @@ class TestConstants:
         for chain_name in ["arbitrumSepolia", "optimismSepolia", "polygonAmoy", "unichainSepolia"]:
             assert chain_name in supported, f"{chain_name} not in SupportedChainName"
         for chain_name in CHAIN_CONFIGS:
-            assert chain_name in supported, f"{chain_name} in CHAIN_CONFIGS but not in SupportedChainName"
+            assert chain_name in supported, (
+                f"{chain_name} in CHAIN_CONFIGS but not in SupportedChainName"
+            )
         from circlekit.constants import CHAIN_ALIASES
 
         for alias in CHAIN_ALIASES:
@@ -2580,9 +2582,7 @@ class TestGatewayMiddleware:
                 ) as mock_settle,
             ):
                 mock_verify.return_value = VerifyResponse(is_valid=True)
-                mock_settle.return_value = SettleResponse(
-                    success=True, transaction="0xtx"
-                )
+                mock_settle.return_value = SettleResponse(success=True, transaction="0xtx")
                 result = await middleware.process_request(
                     payment_header=value,
                     path="/api/test",
