@@ -37,6 +37,7 @@ __author__ = "circlekit contributors"
 
 # Re-export main classes for convenience
 from circlekit.boa_utils import format_usdc, get_rpc_url, parse_usdc
+from circlekit.builtin_hooks import GenericContractHook
 from circlekit.client import (
     Balances,
     DepositResult,
@@ -57,6 +58,12 @@ from circlekit.constants import (
     get_chain_config,
 )
 from circlekit.facilitator import BatchFacilitatorClient
+from circlekit.hooks import (
+    AfterSettleHook,
+    HookResult,
+    SettlementContext,
+    SyncAfterSettleHook,
+)
 from circlekit.key_utils import PrivateKeyLike, normalize_private_key
 from circlekit.server import create_gateway_middleware
 from circlekit.signer import PrivateKeySigner, Signer
@@ -122,6 +129,12 @@ __all__ = [
     "CIRCLE_BATCHING_NAME",
     "CIRCLE_BATCHING_VERSION",
     "CIRCLE_BATCHING_SCHEME",
+    # Hooks
+    "AfterSettleHook",
+    "SyncAfterSettleHook",
+    "SettlementContext",
+    "HookResult",
+    "GenericContractHook",
     # x402 integration (optional)
     "create_resource_server",
     "register_batch_scheme",

@@ -192,7 +192,7 @@ class BatchFacilitatorClient:
             requirements: The payment requirements (dict or Pydantic model)
 
         Returns:
-            SettleResponse with transaction hash if successful
+            SettleResponse with settlement reference if successful
 
         Raises:
             ValueError: If the API response is malformed or missing expected fields

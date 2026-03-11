@@ -143,7 +143,7 @@ class TestSyncDelegation:
 
         assert result is expected
         sync_client._client.withdraw.assert_awaited_once_with(
-            "5.0", chain="arcTestnet", recipient=FAKE_ADDRESS, max_fee=0
+            "5.0", chain="arcTestnet", recipient=FAKE_ADDRESS, max_fee=0, hook_data="0x"
         )
 
     def test_get_gateway_balance(self, sync_client):
@@ -323,7 +323,7 @@ class TestTransfer:
         assert issubclass(w[0].category, DeprecationWarning)
         assert "transfer()" in str(w[0].message)
         sync_client._client.withdraw.assert_awaited_once_with(
-            "1.0", chain="arcTestnet", recipient=FAKE_ADDRESS, max_fee=None
+            "1.0", chain="arcTestnet", recipient=FAKE_ADDRESS, max_fee=None, hook_data="0x"
         )
 
 

@@ -19,6 +19,7 @@ from circlekit.client import (
     WalletBalance,
     WithdrawResult,
 )
+from circlekit.hooks import AfterSettleHook, SyncAfterSettleHook
 from circlekit.key_utils import PrivateKeyLike
 from circlekit.signer import Signer
 from circlekit.tx_executor import TxExecutor
@@ -50,6 +51,8 @@ class GatewayClientSync:
         tx_executor: TxExecutor | None = None,
         rpc_url: str | None = None,
         private_key: PrivateKeyLike | None = None,
+        *,
+        fire_and_forget: bool = True,
     ):
         # Spin up a dedicated event loop on a daemon thread so that all async
         # work (including the httpx.AsyncClient) is bound to a single loop.
@@ -64,6 +67,7 @@ class GatewayClientSync:
                 tx_executor=tx_executor,
                 rpc_url=rpc_url,
                 private_key=private_key,
+                fire_and_forget=fire_and_forget,
             )
         except Exception:
             self._stop_loop()
@@ -94,6 +98,23 @@ class GatewayClientSync:
     def domain(self) -> int:
         """Gateway domain identifier."""
         return self._client.domain
+
+    def on_after_settle(
+        self,
+        hook: AfterSettleHook | SyncAfterSettleHook,
+    ) -> GatewayClientSync:
+        """Register a post-settlement hook.
+
+        Delegates to :meth:`GatewayClient.on_after_settle`.
+
+        Args:
+            hook: An object implementing ``on_settlement(context)`` (async or sync).
+
+        Returns:
+            self, for fluent chaining.
+        """
+        self._client.on_after_settle(hook)
+        return self
 
     # -- Sync wrappers -----------------------------------------------------------
 
@@ -146,13 +167,20 @@ class GatewayClientSync:
         chain: str | None = None,
         recipient: str | None = None,
         max_fee: int | None = None,
+        hook_data: str = "0x",
     ) -> WithdrawResult:
         """Withdraw USDC from Gateway to wallet.
 
         See :meth:`GatewayClient.withdraw` for full documentation.
         """
         return self._run(
-            self._client.withdraw(amount, chain=chain, recipient=recipient, max_fee=max_fee)
+            self._client.withdraw(
+                amount,
+                chain=chain,
+                recipient=recipient,
+                max_fee=max_fee,
+                hook_data=hook_data,
+            )
         )
 
     def get_gateway_balance(self, address: str | None = None) -> GatewayBalance:

@@ -22,7 +22,11 @@ Usage:
     result = await client.pay('http://api.example.com/paid')
 """
 
+from __future__ import annotations
+
 import asyncio
+import inspect
+import logging
 import os
 import warnings
 from concurrent.futures import ThreadPoolExecutor
@@ -50,6 +54,12 @@ from circlekit.constants import (
     get_chain_config,
     get_gateway_api_url,
 )
+from circlekit.hooks import (
+    AfterSettleHook,
+    HookResult,
+    SettlementContext,
+    SyncAfterSettleHook,
+)
 from circlekit.key_utils import PRIVATE_KEY_ENV_VAR, PrivateKeyLike
 from circlekit.signer import PrivateKeySigner, Signer
 from circlekit.tx_executor import BoaTxExecutor, TxExecutor
@@ -57,7 +67,6 @@ from circlekit.x402 import (
     PAYMENT_SIGNATURE_HEADER,
     PaymentPayload,
     PaymentRequirements,
-    create_payment_header,
     create_payment_payload,
     decode_payment_response,
     get_payment_required,
@@ -184,6 +193,8 @@ class GatewayClient:
         tx_executor: TxExecutor | None = None,
         rpc_url: str | None = None,
         private_key: PrivateKeyLike | None = None,
+        *,
+        fire_and_forget: bool = True,
     ):
         self._chain = chain
         self._rpc_url = rpc_url
@@ -241,6 +252,12 @@ class GatewayClient:
 
         self._closed = False
 
+        # Post-settlement hooks
+        self._hooks: list[AfterSettleHook | SyncAfterSettleHook] = []
+        self._background_tasks: set[asyncio.Task] = set()
+        self._fire_and_forget = fire_and_forget
+        self._logger = logging.getLogger(__name__)
+
     @property
     def address(self) -> str:
         """The account's wallet address."""
@@ -260,6 +277,79 @@ class GatewayClient:
     def domain(self) -> int:
         """Gateway domain identifier."""
         return self._config.gateway_domain
+
+    def on_after_settle(
+        self,
+        hook: AfterSettleHook | SyncAfterSettleHook,
+    ) -> GatewayClient:
+        """Register a post-settlement hook.
+
+        Args:
+            hook: An object implementing ``on_settlement(context)`` (async or sync).
+
+        Returns:
+            self, for fluent chaining.
+        """
+        if not isinstance(hook, AfterSettleHook | SyncAfterSettleHook):
+            raise TypeError(
+                f"Hook must implement on_settlement(context). Got {type(hook).__name__}"
+            )
+        self._hooks.append(hook)
+        return self
+
+    async def _fire_hooks(self, context: SettlementContext) -> list[HookResult]:
+        """Run all registered post-settlement hooks.
+
+        If ``fire_and_forget`` is True (default), hooks are dispatched via
+        ``asyncio.create_task`` and this method returns immediately with an
+        empty list.  Otherwise hooks run sequentially and results are returned.
+
+        Hook failures are logged, never raised.
+        """
+        if not self._hooks:
+            return []
+
+        if self._fire_and_forget:
+            for hook in self._hooks:
+                task = asyncio.create_task(self._run_single_hook(hook, context))
+                self._background_tasks.add(task)
+                task.add_done_callback(self._background_tasks.discard)
+            return []
+
+        results: list[HookResult] = []
+        for hook in self._hooks:
+            result = await self._run_single_hook(hook, context)
+            if result is not None:
+                results.append(result)
+        return results
+
+    async def _run_single_hook(
+        self,
+        hook: AfterSettleHook | SyncAfterSettleHook,
+        context: SettlementContext,
+    ) -> HookResult | None:
+        """Execute a single hook, catching and logging any errors."""
+        hook_name = type(hook).__name__
+        try:
+            result = hook.on_settlement(context)
+            if inspect.isawaitable(result):
+                return await result  # type: ignore[return-value]
+            return result  # type: ignore[return-value]
+        except Exception:
+            self._logger.exception("Hook %s failed for nonce=%s", hook_name, context.nonce)
+            return HookResult(hook_name=hook_name, success=False, error="unhandled exception")
+
+    async def _maybe_fire_hooks(
+        self,
+        context: SettlementContext,
+    ) -> None:
+        """Fire hooks if any are registered. Never raises."""
+        if not self._hooks:
+            return
+        try:
+            await self._fire_hooks(context)
+        except Exception:
+            self._logger.exception("Hook dispatch failed unexpectedly")
 
     async def deposit(
         self,
@@ -430,11 +520,14 @@ class GatewayClient:
             )
 
         # Step 3: Create payment signature with resource and x402Version
-        payment_header = create_payment_header(
-            signer=self._signer,
-            requirements=gateway_option,
-            resource=x402_response.resource,
-            x402_version=x402_response.x402_version,
+        payment_payload = create_payment_payload(
+            self._signer,
+            gateway_option,
+            x402_response.x402_version,
+        )
+        payment_header = payment_payload.to_header(
+            gateway_option,
+            x402_response.resource or {},
         )
 
         # Step 4: Retry request with payment header
@@ -474,7 +567,7 @@ class GatewayClient:
             payment_info = data.get("payment", {})
             transaction = payment_info.get("transaction", "")
 
-        return PayResult(
+        result = PayResult(
             data=data,
             amount=int(gateway_option.amount),
             formatted_amount=gateway_option.amount_formatted,
@@ -482,12 +575,36 @@ class GatewayClient:
             status=paid_response.status_code,
         )
 
+        if self._hooks:
+            authorization = payment_payload.authorization
+            payer = authorization.get("from", "")
+            nonce = authorization.get("nonce", "")
+            if not payer or not nonce:
+                self._logger.warning(
+                    "SettlementContext built with missing payer or nonce. "
+                    "authorization may be malformed: %s",
+                    authorization,
+                )
+            ctx = SettlementContext(
+                payer=payer,
+                amount=int(gateway_option.amount),
+                network=gateway_option.network,
+                nonce=nonce,
+                transaction=transaction or None,
+                seller=gateway_option.pay_to,
+                url=url,
+            )
+            await self._maybe_fire_hooks(ctx)
+
+        return result
+
     async def withdraw(
         self,
         amount: str,
         chain: str | None = None,
         recipient: str | None = None,
         max_fee: int | None = None,
+        hook_data: str = "0x",
     ) -> WithdrawResult:
         """
         Withdraw USDC from Gateway to wallet.
@@ -507,6 +624,9 @@ class GatewayClient:
             recipient: Recipient address (default: your address)
             max_fee: Maximum fee in raw USDC units (default: 2.01 USDC).
                      Pass 0 explicitly to override.
+            hook_data: Hex-encoded bytes passed as passthrough metadata
+                included in the EIP-712 signed struct. GatewayMinter does
+                not dispatch this field (default: ``"0x"``).
 
         Returns:
             WithdrawResult with transaction info
@@ -556,7 +676,7 @@ class GatewayClient:
             "destinationCaller": zero_bytes32,
             "value": amount_raw,
             "salt": salt,
-            "hookData": "0x",
+            "hookData": hook_data,
         }
 
         # BurnIntent wraps TransferSpec
@@ -610,7 +730,7 @@ class GatewayClient:
                 "destinationCaller": zero_bytes32,
                 "value": amount_raw,
                 "salt": salt,
-                "hookData": "0x",
+                "hookData": hook_data,
             },
         }
 
@@ -1154,6 +1274,8 @@ class GatewayClient:
         if self._closed:
             return
         self._closed = True
+        if self._background_tasks:
+            await asyncio.gather(*self._background_tasks, return_exceptions=True)
         await self._http.aclose()
         self._blocking_executor.shutdown(wait=False, cancel_futures=True)
 

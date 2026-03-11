@@ -22,6 +22,11 @@ Usage:
         ...
 """
 
+from __future__ import annotations
+
+import asyncio
+import inspect
+import logging
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -38,6 +43,12 @@ from circlekit.constants import (
     get_gateway_api_url,
 )
 from circlekit.facilitator import BatchFacilitatorClient, SettleResponse, VerifyResponse
+from circlekit.hooks import (
+    AfterSettleHook,
+    HookResult,
+    SettlementContext,
+    SyncAfterSettleHook,
+)
 from circlekit.x402 import (
     PAYMENT_REQUIRED_HEADER,
     PAYMENT_RESPONSE_HEADER,
@@ -67,12 +78,21 @@ class GatewayMiddleware:
     and settlement via the Gateway API.
     """
 
-    def __init__(self, config: GatewayMiddlewareConfig):
+    def __init__(
+        self,
+        config: GatewayMiddlewareConfig,
+        *,
+        fire_and_forget: bool = True,
+    ):
         self._config = config
         self._chain_config = get_chain_config(config.chain)
         self._gateway_api = get_gateway_api_url(self._chain_config.is_testnet)
         facilitator_url = config.facilitator_url or self._gateway_api
         self._facilitator = BatchFacilitatorClient(url=facilitator_url)
+        self._hooks: list[AfterSettleHook | SyncAfterSettleHook] = []
+        self._background_tasks: set[asyncio.Task] = set()
+        self._fire_and_forget = fire_and_forget
+        self._logger = logging.getLogger(__name__)
 
         # Build accepted chains map: "eip155:{chain_id}" -> ChainConfig
         # If config.networks is non-empty, resolve each to ChainConfig;
@@ -88,6 +108,98 @@ class GatewayMiddleware:
                 self._accepted_chains[f"eip155:{cc.chain_id}"] = cc
         else:
             self._accepted_chains[f"eip155:{self._chain_config.chain_id}"] = self._chain_config
+
+    def on_after_settle(
+        self,
+        hook: AfterSettleHook | SyncAfterSettleHook,
+    ) -> GatewayMiddleware:
+        """Register a post-settlement hook.
+
+        Args:
+            hook: An object implementing ``on_settlement(context)`` (async or sync).
+
+        Returns:
+            self, for fluent chaining.
+        """
+        if not isinstance(hook, AfterSettleHook | SyncAfterSettleHook):
+            raise TypeError(
+                f"Hook must implement on_settlement(context). Got {type(hook).__name__}"
+            )
+        self._hooks.append(hook)
+        return self
+
+    def _build_settlement_context(
+        self,
+        header_data: dict[str, Any],
+        settle_result: SettleResponse,
+        network: str,
+        price: str,
+        *,
+        path: str | None = None,
+    ) -> SettlementContext:
+        """Extract fields from the header/settle data into a SettlementContext."""
+        payload = header_data.get("payload", header_data)
+        authorization = payload.get("authorization", {})
+        amount = parse_usdc(price)
+        payer = authorization.get("from", "")
+        nonce = authorization.get("nonce", "")
+        if not payer or not nonce:
+            self._logger.warning(
+                "SettlementContext built with missing payer or nonce. "
+                "header_data may be malformed: %s",
+                header_data,
+            )
+        return SettlementContext(
+            payer=payer,
+            amount=amount,
+            network=network,
+            nonce=nonce,
+            transaction=settle_result.transaction,
+            seller=self._config.seller_address,
+            path=path,
+        )
+
+    async def _fire_hooks(self, context: SettlementContext) -> list[HookResult]:
+        """Run all registered post-settlement hooks.
+
+        If ``fire_and_forget`` is True (default), hooks are dispatched via
+        ``asyncio.create_task`` and this method returns immediately with an
+        empty list.  Otherwise hooks run sequentially and results are returned.
+
+        Hook failures are logged, never raised.
+        """
+        if not self._hooks:
+            return []
+
+        if self._fire_and_forget:
+            for hook in self._hooks:
+                task = asyncio.create_task(self._run_single_hook(hook, context))
+                self._background_tasks.add(task)
+                task.add_done_callback(self._background_tasks.discard)
+            return []
+
+        results: list[HookResult] = []
+        for hook in self._hooks:
+            result = await self._run_single_hook(hook, context)
+            if result is not None:
+                results.append(result)
+        return results
+
+    async def _run_single_hook(
+        self,
+        hook: AfterSettleHook | SyncAfterSettleHook,
+        context: SettlementContext,
+    ) -> HookResult | None:
+        """Execute a single hook, catching and logging any errors."""
+        hook_name = type(hook).__name__
+        try:
+            result = hook.on_settlement(context)
+            if inspect.isawaitable(result):
+                return await result  # type: ignore[misc]
+            return result  # type: ignore[return-value]
+        except Exception:
+            self._logger.exception("Hook %s failed for nonce=%s", hook_name, context.nonce)
+            return HookResult(hook_name=hook_name, success=False, error="unhandled exception")
 
     def _decode_and_resolve(
         self,
@@ -210,16 +322,23 @@ class GatewayMiddleware:
             response_headers=response_headers,
         )
 
-    async def settle(self, payment_header: str, price: str) -> PaymentInfo:
+    async def settle(
+        self,
+        payment_header: str,
+        price: str,
+        *,
+        path: str | None = None,
+    ) -> PaymentInfo:
         """
         Settle a verified payment via the Gateway API.
 
         Args:
             payment_header: Value of Payment-Signature header
             price: Price in USD (e.g., "$0.01")
+            path: Request path (e.g., "/api/analyze") passed to hooks.
 
         Returns:
-            PaymentInfo with transaction hash and response headers.
+            PaymentInfo with settlement reference and response headers.
 
         Raises:
             ValueError: On malformed header, unsupported network, or settlement failure.
@@ -237,7 +356,33 @@ class GatewayMiddleware:
         if not settle_result.success:
             raise ValueError(f"Payment settlement failed: {settle_result.error_reason}")
 
-        return self._build_payment_info(header_data, settle_result, network, price)
+        info = self._build_payment_info(header_data, settle_result, network, price)
+        await self._maybe_fire_hooks(header_data, settle_result, network, price, path=path)
+        return info
+
+    async def _maybe_fire_hooks(
+        self,
+        header_data: dict[str, Any],
+        settle_result: SettleResponse,
+        network: str,
+        price: str,
+        *,
+        path: str | None = None,
+    ) -> None:
+        """Build context and fire hooks if any are registered. Never raises."""
+        if not self._hooks:
+            return
+        try:
+            ctx = self._build_settlement_context(
+                header_data,
+                settle_result,
+                network,
+                price,
+                path=path,
+            )
+            await self._fire_hooks(ctx)
+        except Exception:
+            self._logger.exception("Hook dispatch failed unexpectedly")
 
     async def process_request(
         self,
@@ -312,7 +457,15 @@ class GatewayMiddleware:
                 },
             }
 
-        return self._build_payment_info(header_data, settle_result, network, price)
+        info = self._build_payment_info(header_data, settle_result, network, price)
+        await self._maybe_fire_hooks(
+            header_data,
+            settle_result,
+            network,
+            price,
+            path=path,
+        )
+        return info
 
     def _build_402_response(self, amount: str, path: str) -> dict[str, Any]:
         """Build a 402 response body with one accepts entry per accepted network."""
@@ -346,6 +499,8 @@ class GatewayMiddleware:
 
     async def close(self):
         """Close the facilitator HTTP client."""
+        if self._background_tasks:
+            await asyncio.gather(*self._background_tasks, return_exceptions=True)
         await self._facilitator.close()
 
     async def __aenter__(self):
@@ -363,6 +518,8 @@ def create_gateway_middleware(
     chain: str = "arcTestnet",
     *,
     facilitator_url: str | None = None,
+    on_after_settle: list[AfterSettleHook | SyncAfterSettleHook] | None = None,
+    fire_and_forget: bool = True,
 ) -> GatewayMiddleware:
     """
     Create middleware for accepting Gateway payments.
@@ -373,6 +530,9 @@ def create_gateway_middleware(
         description: Resource description for 402 responses
         chain: Primary chain for configuration
         facilitator_url: Custom facilitator URL (default: Circle Gateway API)
+        on_after_settle: List of hooks to run after each successful settlement.
+        fire_and_forget: If True (default), hooks run as background tasks
+            via ``asyncio.create_task`` so the HTTP response is not blocked.
 
     Returns:
         GatewayMiddleware instance
@@ -397,4 +557,7 @@ def create_gateway_middleware(
         chain=chain,
         facilitator_url=facilitator_url,
     )
-    return GatewayMiddleware(config)
+    gw = GatewayMiddleware(config, fire_and_forget=fire_and_forget)
+    for hook in on_after_settle or []:
+        gw.on_after_settle(hook)
+    return gw
