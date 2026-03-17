@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import threading
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -424,6 +425,37 @@ async def test_fire_and_forget_stores_task_references():
     await asyncio.sleep(0.05)
     assert len(gw._background_tasks) == 0
     assert len(hook.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_sync_hook_runs_off_event_loop_thread():
+    """Sync hooks must not block the event loop thread."""
+    loop_thread = threading.current_thread().ident
+
+    class _ThreadRecordingHook:
+        def __init__(self):
+            self.thread_id = None
+
+        def on_settlement(self, context):
+            self.thread_id = threading.current_thread().ident
+            return HookResult(hook_name="thread_check", success=True)
+
+    gw = GatewayMiddleware(_make_config(), fire_and_forget=False)
+    hook = _ThreadRecordingHook()
+    gw.on_after_settle(hook)
+
+    ctx = SettlementContext(
+        payer="0xBuyer",
+        amount=10000,
+        network="eip155:5042002",
+        nonce="0xabc",
+    )
+    results = await gw._fire_hooks(ctx)
+
+    assert hook.thread_id is not None
+    assert hook.thread_id != loop_thread
+    assert len(results) == 1
+    assert results[0].success is True
 
 
 @pytest.mark.asyncio

@@ -331,10 +331,15 @@ class GatewayClient:
         """Execute a single hook, catching and logging any errors."""
         hook_name = type(hook).__name__
         try:
-            result = hook.on_settlement(context)
+            if inspect.iscoroutinefunction(hook.on_settlement):
+                return await hook.on_settlement(context)
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(
+                self._blocking_executor, hook.on_settlement, context,
+            )
             if inspect.isawaitable(result):
-                return await result  # type: ignore[return-value]
-            return result  # type: ignore[return-value]
+                return await result
+            return result
         except Exception:
             self._logger.exception("Hook %s failed for nonce=%s", hook_name, context.nonce)
             return HookResult(hook_name=hook_name, success=False, error="unhandled exception")

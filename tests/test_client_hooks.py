@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import logging
+import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -391,6 +392,43 @@ async def test_pay_warns_on_missing_nonce(caplog):
             await client.pay("http://example.com/api")
 
     assert "missing payer or nonce" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# GatewayClientSync.on_after_settle() delegates correctly
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sync_hook_runs_off_event_loop_thread():
+    """Sync hooks must not block the event loop thread."""
+    loop_thread = threading.current_thread().ident
+
+    class _ThreadRecordingHook:
+        def __init__(self):
+            self.thread_id = None
+
+        def on_settlement(self, context):
+            self.thread_id = threading.current_thread().ident
+            return HookResult(hook_name="thread_check", success=True)
+
+    client = _make_client()
+    client._fire_and_forget = False
+    hook = _ThreadRecordingHook()
+    client.on_after_settle(hook)
+
+    ctx = SettlementContext(
+        payer="0xBuyer",
+        amount=10000,
+        network="eip155:5042002",
+        nonce="0xabc",
+    )
+    results = await client._fire_hooks(ctx)
+
+    assert hook.thread_id is not None
+    assert hook.thread_id != loop_thread
+    assert len(results) == 1
+    assert results[0].success is True
 
 
 # ---------------------------------------------------------------------------

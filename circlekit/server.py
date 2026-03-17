@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -93,6 +94,7 @@ class GatewayMiddleware:
         self._background_tasks: set[asyncio.Task] = set()
         self._fire_and_forget = fire_and_forget
         self._logger = logging.getLogger(__name__)
+        self._blocking_executor = ThreadPoolExecutor(max_workers=1)
 
         # Build accepted chains map: "eip155:{chain_id}" -> ChainConfig
         # If config.networks is non-empty, resolve each to ChainConfig;
@@ -193,10 +195,15 @@ class GatewayMiddleware:
         """Execute a single hook, catching and logging any errors."""
         hook_name = type(hook).__name__
         try:
-            result = hook.on_settlement(context)
+            if inspect.iscoroutinefunction(hook.on_settlement):
+                return await hook.on_settlement(context)
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(
+                self._blocking_executor, hook.on_settlement, context,
+            )
             if inspect.isawaitable(result):
-                return await result  # type: ignore[misc]
-            return result  # type: ignore[return-value]
+                return await result
+            return result
         except Exception:
             self._logger.exception("Hook %s failed for nonce=%s", hook_name, context.nonce)
             return HookResult(hook_name=hook_name, success=False, error="unhandled exception")
@@ -498,9 +505,10 @@ class GatewayMiddleware:
         }
 
     async def close(self):
-        """Close the facilitator HTTP client."""
+        """Close the facilitator HTTP client and thread pool executor."""
         if self._background_tasks:
             await asyncio.gather(*self._background_tasks, return_exceptions=True)
+        self._blocking_executor.shutdown(wait=False, cancel_futures=True)
         await self._facilitator.close()
 
     async def __aenter__(self):

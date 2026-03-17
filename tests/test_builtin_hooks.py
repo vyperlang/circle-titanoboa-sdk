@@ -24,8 +24,8 @@ DUMMY_ABI = [
 ]
 
 
-def _make_ctx() -> SettlementContext:
-    return SettlementContext(
+def _make_ctx(**overrides) -> SettlementContext:
+    defaults = dict(
         payer="0xBuyer",
         amount=10000,
         network="eip155:5042002",
@@ -33,6 +33,8 @@ def _make_ctx() -> SettlementContext:
         transaction="0xtx",
         seller="0xSeller",
     )
+    defaults.update(overrides)
+    return SettlementContext(**defaults)
 
 
 # ---------------------------------------------------------------------------
