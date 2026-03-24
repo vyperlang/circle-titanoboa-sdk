@@ -472,7 +472,7 @@ uv run pre-commit install   # Set up pre-commit hooks
 ### Running Tests
 
 ```bash
-uv run pytest               # Unit tests (359 tests)
+uv run pytest               # Unit tests (360 tests)
 
 # E2E tests (requires testnet USDC):
 PRIVATE_KEY=0x... uv run pytest tests/test_e2e.py -v -s
