@@ -16,8 +16,17 @@ X402_VERSION = 2
 # USDC decimals
 USDC_DECIMALS = 6
 
-# Default max timeout for payment signatures (4 days in seconds)
-DEFAULT_MAX_TIMEOUT_SECONDS = 345600
+# Circle Gateway rejects payment authorizations valid for less than 7 days
+# (invalidReason "authorization_validity_too_short"). Same values as
+# @circle-fin/x402-batching 3.x: the minimum plus a small buffer for clock skew.
+GATEWAY_MIN_AUTH_VALIDITY_SECONDS = 7 * 24 * 60 * 60
+GATEWAY_AUTH_VALIDITY_BUFFER_SECONDS = 100
+GATEWAY_AUTH_VALIDITY_WINDOW_SECONDS = (
+    GATEWAY_MIN_AUTH_VALIDITY_SECONDS + GATEWAY_AUTH_VALIDITY_BUFFER_SECONDS
+)
+
+# Default max timeout for payment signatures
+DEFAULT_MAX_TIMEOUT_SECONDS = GATEWAY_AUTH_VALIDITY_WINDOW_SECONDS
 
 # Gateway contract addresses (per client/index.mjs:292-295)
 TESTNET_GATEWAY_WALLET = "0x0077777d7EBA4688BDeF3E311b846F25870A19B9"

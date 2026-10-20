@@ -152,7 +152,9 @@ class TestIntegration:
         ).decode()
 
         with patch.object(gateway._facilitator, "verify", new_callable=AsyncMock) as mock_verify:
-            mock_verify.return_value = VerifyResponse(is_valid=False)
+            mock_verify.return_value = VerifyResponse(
+                is_valid=False, invalid_reason="authorization_validity_too_short"
+            )
 
             result = await gateway.process_request(
                 payment_header=fake_header,
@@ -162,7 +164,8 @@ class TestIntegration:
 
         assert isinstance(result, dict)
         assert result["status"] == 402
-        assert "invalid" in result["body"]["error"].lower()
+        assert result["body"]["error"] == "Payment verification failed"
+        assert result["body"]["reason"] == "authorization_validity_too_short"
         await gateway.close()
 
     @pytest.mark.asyncio
