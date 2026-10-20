@@ -26,6 +26,7 @@ from circlekit.constants import (
     CIRCLE_BATCHING_SCHEME,
     CIRCLE_BATCHING_VERSION,
     DEFAULT_MAX_TIMEOUT_SECONDS,
+    GATEWAY_AUTH_VALIDITY_WINDOW_SECONDS,
     USDC_DECIMALS,
     X402_VERSION,
 )
@@ -101,11 +102,20 @@ class X402Response:
     resource: dict[str, Any]
     accepts: list[PaymentRequirements]
 
-    def get_gateway_option(self) -> PaymentRequirements | None:
-        """Get the Circle Gateway batched payment option if available."""
+    def get_gateway_option(self, network: str | None = None) -> PaymentRequirements | None:
+        """Get the Circle Gateway batched payment option if available.
+
+        Args:
+            network: If given (e.g. ``"eip155:5042002"``), only an option on this
+                network is returned. Clients should pass their own chain so they
+                only sign for the chain their Gateway balance is on.
+        """
         for option in self.accepts:
-            if option.is_gateway_batched:
-                return option
+            if not option.is_gateway_batched or option.verifying_contract is None:
+                continue
+            if network is not None and option.network != network:
+                continue
+            return option
         return None
 
     def supports_gateway(self) -> bool:
@@ -375,7 +385,13 @@ class BatchEvmScheme:
         """
         current_time = int(time.time())
         valid_after = current_time - 600  # 10 min clock skew buffer
-        valid_before = current_time + requirements.max_timeout_seconds
+        # Gateway rejects authorizations valid for less than 7 days, so a shorter
+        # seller window is raised for signing only, as @circle-fin/x402-batching
+        # does. The accepted block still carries the seller's maxTimeoutSeconds.
+        validity_seconds = max(
+            requirements.max_timeout_seconds, GATEWAY_AUTH_VALIDITY_WINDOW_SECONDS
+        )
+        valid_before = current_time + validity_seconds
 
         nonce = generate_nonce()
 

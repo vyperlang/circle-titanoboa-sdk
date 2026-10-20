@@ -288,7 +288,10 @@ class GatewayMiddleware:
         if not verify_result.is_valid:
             return {
                 "status": 402,
-                "body": {"error": "Invalid payment signature"},
+                "body": {
+                    "error": "Payment verification failed",
+                    "reason": verify_result.invalid_reason,
+                },
             }
 
         # Settle via Gateway API; block access on failure

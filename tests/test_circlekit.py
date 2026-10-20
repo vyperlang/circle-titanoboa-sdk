@@ -10,6 +10,7 @@ import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from circlekit.constants import GATEWAY_AUTH_VALIDITY_WINDOW_SECONDS
 
 # ============================================================================
 # TEST: constants.py
@@ -540,8 +541,132 @@ class TestX402:
 
         # validAfter should be ~ now - 600
         assert before - 600 - 1 <= valid_after <= after - 600 + 1
-        # validBefore should be ~ now + max_timeout_seconds
-        assert before + 345600 - 1 <= valid_before <= after + 345600 + 1
+        # A 4-day window is below Gateway's 7-day minimum, so it is raised
+        window = GATEWAY_AUTH_VALIDITY_WINDOW_SECONDS
+        assert before + window - 1 <= valid_before <= after + window + 1
+
+    def test_longer_validity_window_is_kept(self):
+        """A seller window above Gateway's minimum is used as is."""
+        from circlekit.signer import PrivateKeySigner
+        from circlekit.x402 import PaymentRequirements, create_payment_payload
+
+        signer = PrivateKeySigner(
+            "0x0000000000000000000000000000000000000000000000000000000000000001"
+        )
+        thirty_days = 30 * 24 * 60 * 60
+        requirements = PaymentRequirements(
+            scheme="exact",
+            network="eip155:5042002",
+            asset="0x3600000000000000000000000000000000000000",
+            amount="10000",
+            pay_to="0x1234567890123456789012345678901234567890",
+            max_timeout_seconds=thirty_days,
+            extra={
+                "name": "GatewayWalletBatched",
+                "version": "1",
+                "verifyingContract": "0x0077777d7EBA4688BDeF3E311b846F25870A19B9",
+            },
+        )
+        before = int(time.time())
+        payload = create_payment_payload(signer, requirements)
+        after = int(time.time())
+
+        valid_before = int(payload.authorization["validBefore"])
+        assert before + thirty_days - 1 <= valid_before <= after + thirty_days + 1
+
+    def test_payment_header_keeps_seller_window(self):
+        """A short seller window is raised for signing, but accepted is the seller's offer."""
+        from circlekit.signer import PrivateKeySigner
+        from circlekit.x402 import (
+            PaymentRequirements,
+            create_payment_header,
+            decode_payment_header,
+        )
+
+        signer = PrivateKeySigner(
+            "0x0000000000000000000000000000000000000000000000000000000000000001"
+        )
+        requirements = PaymentRequirements(
+            scheme="exact",
+            network="eip155:5042002",
+            asset="0x3600000000000000000000000000000000000000",
+            amount="10000",
+            pay_to="0x1234567890123456789012345678901234567890",
+            max_timeout_seconds=345600,
+            extra={
+                "name": "GatewayWalletBatched",
+                "version": "1",
+                "verifyingContract": "0x0077777d7EBA4688BDeF3E311b846F25870A19B9",
+            },
+        )
+        before = int(time.time())
+        header = decode_payment_header(create_payment_header(signer, requirements))
+        after = int(time.time())
+        valid_before = int(header["payload"]["authorization"]["validBefore"])
+        window = GATEWAY_AUTH_VALIDITY_WINDOW_SECONDS
+        assert before + window - 1 <= valid_before <= after + window + 1
+        assert header["accepted"]["maxTimeoutSeconds"] == 345600
+
+    def test_seller_advertises_gateway_window(self):
+        """The middleware's 402 offers Gateway's minimum window plus the buffer."""
+        from circlekit.server import create_gateway_middleware
+
+        gateway = create_gateway_middleware(
+            seller_address="0x1234567890123456789012345678901234567890",
+            chain="arcTestnet",
+        )
+        body = gateway.require("$0.01", "/api/test")["body"]
+        assert body["accepts"]
+        for option in body["accepts"]:
+            assert option["maxTimeoutSeconds"] == GATEWAY_AUTH_VALIDITY_WINDOW_SECONDS
+
+    def test_gateway_option_requires_verifying_contract(self):
+        """A batched option without extra.verifyingContract cannot be signed, so it is skipped."""
+        from circlekit.x402 import parse_402_response
+
+        x402 = parse_402_response(
+            {
+                "x402Version": 2,
+                "accepts": [
+                    {
+                        "scheme": "exact",
+                        "network": "eip155:5042002",
+                        "asset": "0x3600000000000000000000000000000000000000",
+                        "amount": "10000",
+                        "payTo": "0x1234567890123456789012345678901234567890",
+                        "maxTimeoutSeconds": 604900,
+                        "extra": {"name": "GatewayWalletBatched", "version": "1"},
+                    }
+                ],
+            }
+        )
+        assert x402.get_gateway_option() is None
+
+    def test_gateway_option_filters_by_network(self):
+        """get_gateway_option(network=...) skips batched options on other chains."""
+        from circlekit.x402 import parse_402_response
+
+        def option(network):
+            return {
+                "scheme": "exact",
+                "network": network,
+                "asset": "0x3600000000000000000000000000000000000000",
+                "amount": "10000",
+                "payTo": "0x1234567890123456789012345678901234567890",
+                "maxTimeoutSeconds": 604900,
+                "extra": {
+                    "name": "GatewayWalletBatched",
+                    "version": "1",
+                    "verifyingContract": "0x0077777d7EBA4688BDeF3E311b846F25870A19B9",
+                },
+            }
+
+        x402 = parse_402_response(
+            {"x402Version": 2, "accepts": [option("eip155:84532"), option("eip155:5042002")]}
+        )
+        assert x402.get_gateway_option().network == "eip155:84532"
+        assert x402.get_gateway_option(network="eip155:5042002").network == "eip155:5042002"
+        assert x402.get_gateway_option(network="eip155:1") is None
 
     def test_payment_header_structure(self):
         """Header must have {x402Version, payload: {authorization, signature}, resource, accepted}."""
@@ -2101,6 +2226,84 @@ class TestGatewayClientParity:
             mock_get.side_effect = [mock_402, mock_paid]
             with pytest.raises(httpx.HTTPStatusError, match="Payment failed"):
                 await client.pay("http://example.com/paid")
+        await client.close()
+
+    @staticmethod
+    def _two_network_402():
+        """402 header data offering Gateway batching on Base Sepolia first, then Arc Testnet."""
+
+        def option(network):
+            return {
+                "scheme": "exact",
+                "network": network,
+                "asset": "0x3600000000000000000000000000000000000000",
+                "amount": "10000",
+                "payTo": "0x1234567890123456789012345678901234567890",
+                "maxTimeoutSeconds": 604900,
+                "extra": {
+                    "name": "GatewayWalletBatched",
+                    "version": "1",
+                    "verifyingContract": "0x0077777d7EBA4688BDeF3E311b846F25870A19B9",
+                },
+            }
+
+        return {
+            "x402Version": 2,
+            "resource": {"url": "/api/test"},
+            "accepts": [option("eip155:84532"), option("eip155:5042002")],
+        }
+
+    @pytest.mark.asyncio
+    async def test_pay_signs_for_own_network_and_reports_reason(self):
+        """pay() picks the option on its own chain and puts the seller's error body in the exception."""
+        import httpx
+        from circlekit.client import GatewayClient
+        from circlekit.x402 import decode_payment_header, encode_payment_required
+
+        client = GatewayClient(
+            chain="arcTestnet",
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        with patch.object(client._http, "get", new_callable=AsyncMock) as mock_get:
+            mock_402 = MagicMock()
+            mock_402.status_code = 402
+            mock_402.headers = {
+                "payment-required": encode_payment_required(self._two_network_402())
+            }
+            mock_402.content = b"{}"
+            mock_paid = MagicMock()
+            mock_paid.status_code = 402
+            mock_paid.request = MagicMock()
+            mock_paid.text = '{"error": "Payment verification failed", "reason": "self_transfer"}'
+            mock_get.side_effect = [mock_402, mock_paid]
+            with pytest.raises(httpx.HTTPStatusError, match="self_transfer"):
+                await client.pay("http://example.com/paid")
+            sent = mock_get.call_args_list[1].kwargs["headers"]
+            header = decode_payment_header(sent["Payment-Signature"])
+            assert header["accepted"]["network"] == "eip155:5042002"
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_supports_rejects_other_network(self):
+        """supports() is False when Gateway batching is offered only on another chain."""
+        from circlekit.client import GatewayClient
+        from circlekit.x402 import encode_payment_required
+
+        client = GatewayClient(
+            chain="arcTestnet",
+            private_key="0x0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        body = self._two_network_402()
+        body["accepts"] = body["accepts"][:1]
+        with patch.object(client._http, "get", new_callable=AsyncMock) as mock_get:
+            mock_response = MagicMock()
+            mock_response.status_code = 402
+            mock_response.headers = {"payment-required": encode_payment_required(body)}
+            mock_response.content = json.dumps(body).encode()
+            mock_get.return_value = mock_response
+            result = await client.supports("http://example.com/paid")
+            assert result.supported is False
+            assert "eip155:5042002" in result.error
         await client.close()
 
     @pytest.mark.asyncio

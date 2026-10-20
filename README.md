@@ -362,6 +362,10 @@ payload = scheme.create_payment_payload(
 )
 ```
 
+Circle Gateway rejects authorizations valid for less than 7 days. If the seller's
+`maxTimeoutSeconds` is shorter, the signed `validBefore` is raised to 7 days plus 100 s,
+as in `@circle-fin/x402-batching`. Keep the seller's `maxTimeoutSeconds` in `accepted`.
+
 ### Low-Level x402 Functions
 
 ```python
@@ -376,7 +380,7 @@ from circlekit import PrivateKeySigner
 
 # Parse 402 response
 x402 = parse_402_response(response.content)
-requirements = x402.get_gateway_option()
+requirements = x402.get_gateway_option(network="eip155:5042002")  # your chain
 
 # Check if requirements use Gateway batching
 if is_batch_payment(requirements):
@@ -385,7 +389,9 @@ if is_batch_payment(requirements):
 
 # Create payment signature
 signer = PrivateKeySigner("0x...")
-header = create_payment_header(signer=signer, requirements=requirements)
+header = create_payment_header(
+    signer=signer, requirements=requirements, resource=x402.resource
+)
 
 # Decode an existing payment header
 payload = decode_payment_header(header)

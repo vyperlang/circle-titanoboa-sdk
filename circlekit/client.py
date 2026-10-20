@@ -421,12 +421,13 @@ class GatewayClient:
         payment_required_header = response.headers.get("payment-required")
         x402_response = get_payment_required(payment_required_header, response.content)
 
-        # Find Gateway batching option
-        gateway_option = x402_response.get_gateway_option()
+        # Find the Gateway batching option for this client's chain
+        network = f"eip155:{self._config.chain_id}"
+        gateway_option = x402_response.get_gateway_option(network=network)
         if not gateway_option:
             raise ValueError(
-                f"URL {url} does not support Circle Gateway batching. "
-                f"Available schemes: {[a.scheme for a in x402_response.accepts]}"
+                f"URL {url} does not offer Circle Gateway batching on {network}. "
+                f"Offered: {[(a.scheme, a.network) for a in x402_response.accepts]}"
             )
 
         # Step 3: Create payment signature with resource and x402Version
@@ -448,7 +449,8 @@ class GatewayClient:
         # Paid response must be successful
         if paid_response.status_code >= 400 or paid_response.status_code < 200:
             raise httpx.HTTPStatusError(
-                f"Payment failed with status {paid_response.status_code}",
+                f"Payment failed with status {paid_response.status_code}: "
+                f"{paid_response.text[:500]}",
                 request=paid_response.request,
                 response=paid_response,
             )
@@ -871,7 +873,8 @@ class GatewayClient:
             # Parse 402 response (v2 header strict, v1 body fallback)
             payment_required_header = response.headers.get("payment-required")
             x402_response = get_payment_required(payment_required_header, response.content)
-            gateway_option = x402_response.get_gateway_option()
+            network = f"eip155:{self._config.chain_id}"
+            gateway_option = x402_response.get_gateway_option(network=network)
 
             if gateway_option:
                 return SupportsResult(
@@ -888,7 +891,7 @@ class GatewayClient:
                 return SupportsResult(
                     supported=False,
                     requirements=None,
-                    error="No Gateway batching option available",
+                    error=f"No Gateway batching option available on {network}",
                 )
 
         except Exception as e:
