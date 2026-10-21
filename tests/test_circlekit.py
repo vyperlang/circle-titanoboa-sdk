@@ -545,6 +545,13 @@ class TestX402:
         window = GATEWAY_AUTH_VALIDITY_WINDOW_SECONDS
         assert before + window - 1 <= valid_before <= after + window + 1
 
+    def test_gateway_window_values(self):
+        """Gateway rejects authorizations valid for less than 7 days, so pin the numbers."""
+        from circlekit.constants import GATEWAY_MIN_AUTH_VALIDITY_SECONDS
+
+        assert GATEWAY_MIN_AUTH_VALIDITY_SECONDS == 604800
+        assert GATEWAY_AUTH_VALIDITY_WINDOW_SECONDS == 604900
+
     def test_longer_validity_window_is_kept(self):
         """A seller window above Gateway's minimum is used as is."""
         from circlekit.signer import PrivateKeySigner

@@ -18,7 +18,7 @@ USDC_DECIMALS = 6
 
 # Circle Gateway rejects payment authorizations valid for less than 7 days
 # (invalidReason "authorization_validity_too_short"). Same values as
-# @circle-fin/x402-batching 3.x: the minimum plus a small buffer for clock skew.
+# @circle-fin/x402-batching since 3.0.4: the minimum plus a 100-second buffer.
 GATEWAY_MIN_AUTH_VALIDITY_SECONDS = 7 * 24 * 60 * 60
 GATEWAY_AUTH_VALIDITY_BUFFER_SECONDS = 100
 GATEWAY_AUTH_VALIDITY_WINDOW_SECONDS = (
